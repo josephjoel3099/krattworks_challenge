@@ -26,17 +26,24 @@ target_link_libraries(imgui PUBLIC OpenGL::GL glfw dl)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libs/mavlink)
 add_compile_options(-Wno-address-of-packed-member) # suppress -Waddress-of-packed-member
 
+# Project headers (.hpp)
+set(PROJECT_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
+set(PROJECT_CONFIG_DIR ${CMAKE_CURRENT_SOURCE_DIR}/config)
+
 # Google Test https://github.com/google/googletest.git
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/googletest)
 
 # GCS
 add_executable(GCS src/gcs_main.cpp)
 target_link_libraries(GCS PRIVATE SimpleUdp imgui)
+target_include_directories(GCS PRIVATE ${PROJECT_INCLUDE_DIR} ${PROJECT_CONFIG_DIR})
 
 # Drone
 add_executable(Drone src/drone_main.cpp)
 target_link_libraries(Drone PRIVATE SimpleUdp)
+target_include_directories(Drone PRIVATE ${PROJECT_INCLUDE_DIR} ${PROJECT_CONFIG_DIR})
 
 # Unit Tests
 add_executable(UnitTests test/test_main.cpp)
 target_link_libraries(UnitTests PRIVATE gtest SimpleUdp)
+target_include_directories(UnitTests PRIVATE ${PROJECT_INCLUDE_DIR} ${PROJECT_CONFIG_DIR})
