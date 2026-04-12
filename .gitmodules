@@ -1,9 +1,9 @@
-[submodule "libs/libs/glfw"]
-	path = libs/libs/glfw
+[submodule "libs/glfw"]
+	path = libs/glfw
 	url = https://github.com/glfw/glfw.git
-[submodule "libs/libs/imgui"]
-	path = libs/libs/imgui
+[submodule "libs/imgui"]
+	path = libs/imgui
 	url = https://github.com/ocornut/imgui.git
-[submodule "libs/libs/mavlink"]
-	path = libs/libs/mavlink
+[submodule "libs/mavlink"]
+	path = libs/mavlink
 	url = https://github.com/mavlink/c_library_v2.git
