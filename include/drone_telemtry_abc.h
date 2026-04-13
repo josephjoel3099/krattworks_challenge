@@ -6,7 +6,8 @@
 
 enum class MAVMode {
     GUIDED_DISARMED = 0,
-    GUIDED_ARMED = 1
+    GUIDED_ARMED = 1,
+    LAND = 2
 };
 
 class DroneTelemetryABC {
@@ -40,6 +41,7 @@ protected:
     static constexpr float TELEMETRY_RATE = 10.0f;  // Hz
     static constexpr float TELEMETRY_INTERVAL = 1.0f / TELEMETRY_RATE;  // seconds
     static constexpr float CLIMB_RATE = 2.0f;  // m/s - rate to climb to target altitude
+    static constexpr float LAND_RATE = 1.0f;  // m/s - rate to descend during landing
 };
 
 #endif // DRONE_TELEMETRY_ABC_H

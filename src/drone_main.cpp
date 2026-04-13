@@ -4,6 +4,7 @@
 #include <drone_telemtry_abc.h>
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <csignal>
@@ -59,9 +60,22 @@ public:
 			// Transitioning to ARMED - set target altitude to 20m
 			target_altitude_ = -20.0f;  // NED convention: negative Z is up
 			std::printf("Drone: ARMED - climbing to 20m altitude\n");
-		} else if (mode == MAVMode::GUIDED_DISARMED && mode_ == MAVMode::GUIDED_ARMED) {
-			// Transitioning to DISARMED - keep current altitude
-			target_altitude_ = altitude_;
+		} else if (mode == MAVMode::LAND && mode_ != MAVMode::GUIDED_DISARMED) {
+			target_altitude_ = 0.0f;
+			std::printf("Drone: LAND mode engaged\n");
+		} else if (mode == MAVMode::GUIDED_DISARMED) {
+			if (altitude_ < -0.5f) {
+				mode_ = MAVMode::LAND;
+				target_altitude_ = 0.0f;
+				std::printf("Drone: DISARM requested while airborne - entering LAND mode\n");
+				return;
+			}
+
+			target_altitude_ = 0.0f;
+			altitude_ = 0.0f;
+			vx_ = 0.0f;
+			vy_ = 0.0f;
+			vz_ = 0.0f;
 			std::printf("Drone: DISARMED\n");
 		}
 		mode_ = mode;
@@ -88,7 +102,7 @@ public:
 	void sendHeartbeat() override {
 		std::lock_guard<std::mutex> lock(state_mutex_);
 		std::printf("HEARTBEAT: System armed=%s\n",
-			mode_ == MAVMode::GUIDED_ARMED ? "true" : "false");
+			mode_ == MAVMode::GUIDED_DISARMED ? "false" : "true");
 	}
 
 	void sendLocalPositionNED() override {
@@ -103,25 +117,39 @@ public:
 		const auto now = std::chrono::steady_clock::now();
 		const float t = std::chrono::duration<float>(now - start_time_).count();
 		
-		// If armed, climb towards target altitude
+		// If armed, climb towards target altitude.
 		if (mode_ == MAVMode::GUIDED_ARMED) {
 			const float alt_diff = target_altitude_ - altitude_;
 			const float alt_step = std::clamp(alt_diff, -CLIMB_RATE * 0.01f, CLIMB_RATE * 0.01f);
 			altitude_ += alt_step;
 			vz_ = alt_step * 100.0f;  // Convert to velocity for display
+		} else if (mode_ == MAVMode::LAND) {
+			const float alt_diff = 0.0f - altitude_;
+			const float alt_step = std::clamp(alt_diff, 0.0f, LAND_RATE * 0.01f);
+			altitude_ += alt_step;
+			vz_ = alt_step * 100.0f;
+
+			if (altitude_ >= -0.5f) {
+				altitude_ = 0.0f;
+				mode_ = MAVMode::GUIDED_DISARMED;
+				vx_ = 0.0f;
+				vy_ = 0.0f;
+				vz_ = 0.0f;
+				std::printf("Drone: Landed and disarmed\n");
+			}
 		} else {
 			// When disarmed, maintain current altitude (zero vertical velocity)
 			vz_ = 0.0f;
 		}
 		
-		// Simulate circular movement pattern only when armed
+		// Simulate circular movement pattern only when armed.
 		if (mode_ == MAVMode::GUIDED_ARMED) {
 			x_ = std::sin(t) * 10.0f;
 			y_ = std::cos(t) * 10.0f;
 			vx_ = std::cos(t) * 10.0f;
 			vy_ = -std::sin(t) * 10.0f;
 		} else {
-			// When disarmed, stay at current position
+			// During land/disarmed, hold position and do not translate.
 			vx_ = 0.0f;
 			vy_ = 0.0f;
 		}
@@ -158,10 +186,14 @@ void handle_mavlink_command(const mavlink_message_t& msg)
 	case MAVLINK_MSG_ID_SET_MODE: {
 		mavlink_set_mode_t cmd{};
 		mavlink_msg_set_mode_decode(&msg, &cmd);
-		std::printf("Drone: SET_MODE command received - base_mode=0x%02X\n", cmd.base_mode);
+		std::printf(
+			"Drone: SET_MODE command received - base_mode=0x%02X custom_mode=%u\n",
+			cmd.base_mode,
+			cmd.custom_mode);
 		
-		// Check if it's GUIDED mode
-		if ((cmd.base_mode & MAV_MODE_FLAG_GUIDED_ENABLED) && (cmd.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)) {
+		if (cmd.custom_mode == static_cast<uint32_t>(MAVMode::LAND)) {
+			g_telemetry.setMode(MAVMode::LAND);
+		} else if ((cmd.base_mode & MAV_MODE_FLAG_GUIDED_ENABLED) && (cmd.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)) {
 			g_telemetry.setMode(MAVMode::GUIDED_ARMED);
 		} else if ((cmd.base_mode & MAV_MODE_FLAG_GUIDED_ENABLED) && !(cmd.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)) {
 			g_telemetry.setMode(MAVMode::GUIDED_DISARMED);
@@ -240,8 +272,8 @@ void mavlink_worker(const IpAddress& gcs_addr, uint16_t drone_port)
 				&hb_msg,
 				MAV_TYPE_QUADROTOR,
 				MAV_AUTOPILOT_GENERIC,
-				g_telemetry.getMode() == MAVMode::GUIDED_ARMED ? MAV_MODE_GUIDED_ARMED : MAV_MODE_GUIDED_DISARMED,
-				0,
+				g_telemetry.getMode() == MAVMode::GUIDED_DISARMED ? MAV_MODE_GUIDED_DISARMED : MAV_MODE_GUIDED_ARMED,
+				static_cast<uint32_t>(g_telemetry.getMode()),
 				MAV_STATE_ACTIVE);
 
 			uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];

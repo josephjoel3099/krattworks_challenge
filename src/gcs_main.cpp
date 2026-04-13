@@ -11,6 +11,12 @@
 
 namespace {
 
+enum class RequestedMode : uint32_t {
+	GuidedDisarmed = 0,
+	GuidedArmed = 1,
+	Land = 2,
+};
+
 std::atomic_bool g_running{true};
 UdpSocket* g_socket_ptr = nullptr;
 IpAddress g_drone_addr{"127.0.0.1", 14551};
@@ -29,11 +35,12 @@ void handle_mavlink_message(const mavlink_message_t& msg)
 		mavlink_heartbeat_t hb{};
 		mavlink_msg_heartbeat_decode(&msg, &hb);
 		std::printf(
-			"GCS: HEARTBEAT sys=%u comp=%u type=%u mode=0x%02X state=%u\n",
+			"GCS: HEARTBEAT sys=%u comp=%u type=%u mode=0x%02X custom=%u state=%u\n",
 			msg.sysid,
 			msg.compid,
 			hb.type,
 			hb.base_mode,
+			hb.custom_mode,
 			hb.system_status);
 		break;
 	}
@@ -56,7 +63,7 @@ void handle_mavlink_message(const mavlink_message_t& msg)
 	}
 }
 
-void send_set_mode_command(bool arm)
+void send_set_mode_command(RequestedMode mode)
 {
 	if (!g_socket_ptr) return;
 
@@ -65,26 +72,39 @@ void send_set_mode_command(bool arm)
 	constexpr uint8_t kDroneSystemId = 1;
 
 	mavlink_message_t msg;
+	uint8_t base_mode = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | MAV_MODE_FLAG_GUIDED_ENABLED;
+	if (mode != RequestedMode::GuidedDisarmed) {
+		base_mode |= MAV_MODE_FLAG_SAFETY_ARMED;
+	}
+
 	mavlink_msg_set_mode_pack(
 		kGcsSystemId,
 		kGcsComponentId,
 		&msg,
 		kDroneSystemId,
-		arm ? MAV_MODE_GUIDED_ARMED : MAV_MODE_GUIDED_DISARMED,
-		0);
+		base_mode,
+		static_cast<uint32_t>(mode));
 
 	uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
 	const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &msg);
 	g_socket_ptr->sendto(tx_buf, len, g_drone_addr);
 
-	std::printf("GCS: Sent SET_MODE command - %s\n", arm ? "ARM" : "DISARM");
+	const char* label = "DISARM";
+	if (mode == RequestedMode::GuidedArmed) {
+		label = "ARM";
+	} else if (mode == RequestedMode::Land) {
+		label = "LAND";
+	}
+
+	std::printf("GCS: Sent SET_MODE command - %s\n", label);
 }
 
 void command_input_thread()
 {
 	std::printf("GCS: Commands available:\n");
 	std::printf("  'a' - ARM drone (will climb to 20m)\n");
-	std::printf("  'd' - DISARM drone\n");
+	std::printf("  'l' - LAND drone\n");
+	std::printf("  'd' - DISARM drone (lands first if airborne)\n");
 	std::printf("  'q' - quit\n");
 
 	while (g_running) {
@@ -96,11 +116,15 @@ void command_input_thread()
 		switch (cmd) {
 		case 'a':
 		case 'A':
-			send_set_mode_command(true);
+			send_set_mode_command(RequestedMode::GuidedArmed);
+			break;
+		case 'l':
+		case 'L':
+			send_set_mode_command(RequestedMode::Land);
 			break;
 		case 'd':
 		case 'D':
-			send_set_mode_command(false);
+			send_set_mode_command(RequestedMode::GuidedDisarmed);
 			break;
 		case 'q':
 		case 'Q':
