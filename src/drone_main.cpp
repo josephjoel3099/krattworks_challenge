@@ -59,15 +59,15 @@ public:
 		if (mode == MAVMode::GUIDED_ARMED && mode_ != MAVMode::GUIDED_ARMED) {
 			// Transitioning to ARMED - set target altitude to 20m
 			target_altitude_ = -20.0f;  // NED convention: negative Z is up
-			std::printf("Drone: ARMED - climbing to 20m altitude\n");
+			std::printf("\nDrone: ARMED - climbing to 20m altitude\n");
 		} else if (mode == MAVMode::LAND && mode_ != MAVMode::GUIDED_DISARMED) {
 			target_altitude_ = 0.0f;
-			std::printf("Drone: LAND mode engaged\n");
+			std::printf("\nDrone: LAND mode engaged\n");
 		} else if (mode == MAVMode::GUIDED_DISARMED) {
 			if (altitude_ < -0.5f) {
 				mode_ = MAVMode::LAND;
 				target_altitude_ = 0.0f;
-				std::printf("Drone: DISARM requested while airborne - entering LAND mode\n");
+				std::printf("\nDrone: DISARM requested while airborne - entering LAND mode\n");
 				return;
 			}
 
@@ -76,7 +76,7 @@ public:
 			vx_ = 0.0f;
 			vy_ = 0.0f;
 			vz_ = 0.0f;
-			std::printf("Drone: DISARMED\n");
+			std::printf("\nDrone: DISARMED\n");
 		}
 		mode_ = mode;
 	}
@@ -101,14 +101,22 @@ public:
 
 	void sendHeartbeat() override {
 		std::lock_guard<std::mutex> lock(state_mutex_);
-		std::printf("HEARTBEAT: System armed=%s\n",
+		static bool hb_tick = false;
+		hb_tick = !hb_tick;
+		std::printf("\rHEARTBEAT: [%c] System armed=%s   ",
+			hb_tick ? '*' : ' ',
 			mode_ == MAVMode::GUIDED_DISARMED ? "false" : "true");
+		std::fflush(stdout);
 	}
 
 	void sendLocalPositionNED() override {
 		std::lock_guard<std::mutex> lock(state_mutex_);
-		std::printf("LOCAL_POSITION_NED: X=%.2f Y=%.2f Z=%.2f VX=%.2f VY=%.2f VZ=%.2f\n",
+		static bool pos_tick = false;
+		pos_tick = !pos_tick;
+		std::printf("\rLOCAL_POSITION_NED: [%c] X=%.2f Y=%.2f Z=%.2f VX=%.2f VY=%.2f VZ=%.2f   ",
+			pos_tick ? '*' : ' ',
 			x_, y_, altitude_, vx_, vy_, vz_);
+		std::fflush(stdout);
 	}
 
 	void update() override {
@@ -135,7 +143,7 @@ public:
 				vx_ = 0.0f;
 				vy_ = 0.0f;
 				vz_ = 0.0f;
-				std::printf("Drone: Landed and disarmed\n");
+				std::printf("\nDrone: Landed and disarmed\n");
 			}
 		} else {
 			// When disarmed, maintain current altitude (zero vertical velocity)

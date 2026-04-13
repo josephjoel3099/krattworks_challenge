@@ -34,21 +34,28 @@ void handle_mavlink_message(const mavlink_message_t& msg)
 	case MAVLINK_MSG_ID_HEARTBEAT: {
 		mavlink_heartbeat_t hb{};
 		mavlink_msg_heartbeat_decode(&msg, &hb);
+		static bool hb_tick = false;
+		hb_tick = !hb_tick;
 		std::printf(
-			"GCS: HEARTBEAT sys=%u comp=%u type=%u mode=0x%02X custom=%u state=%u\n",
+			"\rGCS: HEARTBEAT [%c] sys=%u comp=%u type=%u mode=0x%02X custom=%u state=%u   ",
+			hb_tick ? '*' : ' ',
 			msg.sysid,
 			msg.compid,
 			hb.type,
 			hb.base_mode,
 			hb.custom_mode,
 			hb.system_status);
+		std::fflush(stdout);
 		break;
 	}
 	case MAVLINK_MSG_ID_LOCAL_POSITION_NED: {
 		mavlink_local_position_ned_t pos{};
 		mavlink_msg_local_position_ned_decode(&msg, &pos);
+		static bool pos_tick = false;
+		pos_tick = !pos_tick;
 		std::printf(
-			"GCS: LOCAL_POSITION_NED t=%u x=%.2f y=%.2f z=%.2f vx=%.2f vy=%.2f vz=%.2f\n",
+			"\rGCS: LOCAL_POSITION_NED [%c] t=%u x=%.2f y=%.2f z=%.2f vx=%.2f vy=%.2f vz=%.2f   ",
+			pos_tick ? '*' : ' ',
 			pos.time_boot_ms,
 			pos.x,
 			pos.y,
@@ -56,6 +63,7 @@ void handle_mavlink_message(const mavlink_message_t& msg)
 			pos.vx,
 			pos.vy,
 			pos.vz);
+		std::fflush(stdout);
 		break;
 	}
 	default:
@@ -131,6 +139,7 @@ void command_input_thread()
 			g_running = false;
 			break;
 		default:
+			std::printf("GCS: Unknown command '%c'\n", cmd);
 			break;
 		}
 	}
