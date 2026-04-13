@@ -6,10 +6,14 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
+#include <thread>
+#include <string>
 
 namespace {
 
 std::atomic_bool g_running{true};
+UdpSocket* g_socket_ptr = nullptr;
+IpAddress g_drone_addr{"127.0.0.1", 14551};
 
 void signal_handler(int signum)
 {
@@ -52,6 +56,62 @@ void handle_mavlink_message(const mavlink_message_t& msg)
 	}
 }
 
+void send_set_mode_command(bool arm)
+{
+	if (!g_socket_ptr) return;
+
+	constexpr uint8_t kGcsSystemId = 255;
+	constexpr uint8_t kGcsComponentId = MAV_COMP_ID_SYSTEM_CONTROL;
+	constexpr uint8_t kDroneSystemId = 1;
+
+	mavlink_message_t msg;
+	mavlink_msg_set_mode_pack(
+		kGcsSystemId,
+		kGcsComponentId,
+		&msg,
+		kDroneSystemId,
+		arm ? MAV_MODE_GUIDED_ARMED : MAV_MODE_GUIDED_DISARMED,
+		0);
+
+	uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
+	const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &msg);
+	g_socket_ptr->sendto(tx_buf, len, g_drone_addr);
+
+	std::printf("GCS: Sent SET_MODE command - %s\n", arm ? "ARM" : "DISARM");
+}
+
+void command_input_thread()
+{
+	std::printf("GCS: Commands available:\n");
+	std::printf("  'a' - ARM drone (will climb to 20m)\n");
+	std::printf("  'd' - DISARM drone\n");
+	std::printf("  'q' - quit\n");
+
+	while (g_running) {
+		char cmd;
+		if (scanf("%c", &cmd) != 1) {
+			continue;
+		}
+
+		switch (cmd) {
+		case 'a':
+		case 'A':
+			send_set_mode_command(true);
+			break;
+		case 'd':
+		case 'D':
+			send_set_mode_command(false);
+			break;
+		case 'q':
+		case 'Q':
+			g_running = false;
+			break;
+		default:
+			break;
+		}
+	}
+}
+
 } // namespace
 
 int main()
@@ -66,7 +126,12 @@ int main()
 		return 1;
 	}
 
+	g_socket_ptr = &server;
+
 	std::printf("GCS: listening on 127.0.0.1:%u\n", kGcsPort);
+
+	// Start command input thread
+	std::thread cmd_thread(command_input_thread);
 
 	uint8_t rx_buf[2048];
 	mavlink_status_t parse_status{};
@@ -92,6 +157,7 @@ int main()
 		}
 	}
 
+	cmd_thread.join();
 	server.close();
 	std::printf("GCS: stopped\n");
 	return 0;
