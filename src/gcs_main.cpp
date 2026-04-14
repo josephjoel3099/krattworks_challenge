@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <deque>
+#include <limits>
 #include <mutex>
 #include <thread>
 
@@ -27,6 +28,18 @@ enum class RequestedMode : uint32_t {
 	Land = 2,
 };
 
+enum class PendingCommandType {
+	ModeChange,
+	OverrideGoto,
+};
+
+struct PendingCommand {
+	PendingCommandType type = PendingCommandType::ModeChange;
+	RequestedMode mode = RequestedMode::GuidedDisarmed;
+	XYPoint target{};
+	float target_altitude_ned_m = 0.0f;
+};
+
 IpAddress g_drone_addr{};
 SharedConfig g_shared_config;
 GcsConfig g_gcs_config;
@@ -36,7 +49,7 @@ TelemetrySnapshot g_telemetry;
 std::atomic_bool g_running{true};
 std::mutex g_telemetry_mutex;
 std::mutex g_command_mutex;
-std::deque<RequestedMode> g_pending_commands;
+std::deque<PendingCommand> g_pending_commands;
 
 constexpr size_t kMaxHistoryPoints = 512;
 constexpr uint8_t kGcsSystemId = 255;
@@ -44,6 +57,7 @@ constexpr uint8_t kGcsComponentId = MAV_COMP_ID_SYSTEM_CONTROL;
 constexpr uint8_t kDroneSystemId = 1;
 constexpr uint8_t kDroneComponentId = MAV_COMP_ID_AUTOPILOT1;
 constexpr auto kGeofenceFetchInterval = std::chrono::milliseconds(250);
+constexpr float kArmedHoldAltitudeM = 20.0f;
 
 void signal_handler(int signum)
 {
@@ -68,17 +82,39 @@ const char* mode_label(RequestedMode mode)
 void queue_mode_command(RequestedMode mode)
 {
 	std::lock_guard<std::mutex> lock(g_command_mutex);
-	g_pending_commands.push_back(mode);
+	g_pending_commands.push_back(PendingCommand{
+		PendingCommandType::ModeChange,
+		mode,
+		{},
+		-kArmedHoldAltitudeM,
+	});
 }
 
-bool pop_mode_command(RequestedMode& mode)
+bool queue_override_goto_command(float x, float y, float altitude_m)
+{
+	std::lock_guard<std::mutex> lock(g_command_mutex);
+	const auto geofence = app_config::sort_geofence_corners(g_drone_config.geofence_corners_m);
+	if (!app_config::is_point_inside_polygon(XYPoint{x, y}, geofence) || altitude_m < 0.0f) {
+		return false;
+	}
+
+	g_pending_commands.push_back(PendingCommand{
+		PendingCommandType::OverrideGoto,
+		RequestedMode::GuidedArmed,
+		XYPoint{x, y},
+		-altitude_m,
+	});
+	return true;
+}
+
+bool pop_pending_command(PendingCommand& command)
 {
 	std::lock_guard<std::mutex> lock(g_command_mutex);
 	if (g_pending_commands.empty()) {
 		return false;
 	}
 
-	mode = g_pending_commands.front();
+	command = g_pending_commands.front();
 	g_pending_commands.pop_front();
 	return true;
 }
@@ -197,6 +233,36 @@ void send_set_mode_command(UdpSocket& socket, RequestedMode mode)
 	std::printf("GCS: Sent SET_MODE command - %s\n", mode_label(mode));
 }
 
+void send_override_goto_command(UdpSocket& socket, const XYPoint& target, float target_altitude_ned_m)
+{
+	mavlink_message_t msg;
+	mavlink_msg_command_long_pack(
+		kGcsSystemId,
+		kGcsComponentId,
+		&msg,
+		kDroneSystemId,
+		kDroneComponentId,
+		MAV_CMD_OVERRIDE_GOTO,
+		0,
+		static_cast<float>(MAV_GOTO_DO_HOLD),
+		static_cast<float>(MAV_GOTO_HOLD_AT_SPECIFIED_POSITION),
+		static_cast<float>(MAV_FRAME_LOCAL_NED),
+		std::numeric_limits<float>::quiet_NaN(),
+		target.x,
+		target.y,
+		target_altitude_ned_m);
+
+	uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
+	const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &msg);
+	socket.sendto(tx_buf, len, g_drone_addr);
+
+	std::printf(
+		"GCS: Sent MAV_CMD_OVERRIDE_GOTO - X=%.2f Y=%.2f Z=%.2f\n",
+		target.x,
+		target.y,
+		target_altitude_ned_m);
+}
+
 void send_geofence_fetch_request(UdpSocket& socket, uint8_t point_index)
 {
 	mavlink_message_t msg;
@@ -245,9 +311,13 @@ void mavlink_worker()
 	mavlink_status_t parse_status{};
 
 	while (g_running) {
-		RequestedMode requested_mode{};
-		while (pop_mode_command(requested_mode)) {
-			send_set_mode_command(server, requested_mode);
+		PendingCommand command{};
+		while (pop_pending_command(command)) {
+			if (command.type == PendingCommandType::ModeChange) {
+				send_set_mode_command(server, command.mode);
+			} else if (command.type == PendingCommandType::OverrideGoto) {
+				send_override_goto_command(server, command.target, command.target_altitude_ned_m);
+			}
 		}
 
 		request_geofence_if_needed(server);
@@ -293,7 +363,7 @@ DashboardState make_dashboard_state()
 	state.host = g_shared_config.host.c_str();
 	state.gcs_port = g_gcs_config.gcs_port;
 	state.drone_port = g_gcs_config.drone_port;
-	state.arm_target_altitude_m = g_drone_config.arm_target_altitude_m;
+	state.arm_target_altitude_m = kArmedHoldAltitudeM;
 	state.is_running = g_running.load();
 	state.telemetry = get_telemetry_snapshot();
 	return state;
@@ -305,6 +375,9 @@ DashboardActions make_dashboard_actions()
 	actions.on_arm = [] { queue_mode_command(RequestedMode::GuidedArmed); };
 	actions.on_land = [] { queue_mode_command(RequestedMode::Land); };
 	actions.on_disarm = [] { queue_mode_command(RequestedMode::GuidedDisarmed); };
+	actions.on_send_goto = [](float x, float y, float altitude_m) {
+		return queue_override_goto_command(x, y, altitude_m);
+	};
 	actions.on_clear_track = [] { clear_position_history(); };
 	return actions;
 }
@@ -335,6 +408,8 @@ int main()
 		std::fprintf(stderr, "GCS: drone_config.json is missing or invalid\n");
 		return 1;
 	}
+
+	g_drone_config.arm_target_altitude_m = kArmedHoldAltitudeM;
 
 	g_drone_addr = IpAddress{g_shared_config.host.c_str(), g_gcs_config.drone_port};
 
