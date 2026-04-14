@@ -12,26 +12,26 @@
 #include <vector>
 
 struct SharedConfig {
-	std::string host = "127.0.0.1";
+	std::string host;
 };
 
 struct GcsConfig {
-	uint16_t gcs_port = 14550;
-	uint16_t drone_port = 14551;
-	int poll_timeout_ms = 100;
+	uint16_t gcs_port = 0;
+	uint16_t drone_port = 0;
+	int poll_timeout_ms = 0;
 };
 
 struct DroneConfig {
-	uint16_t drone_port = 14551;
-	uint16_t gcs_port = 14550;
-	float max_velocity_mps = 10.0f;
-	float update_rate_hz = 100.0f;
-	float heartbeat_rate_hz = 1.0f;
-	float position_rate_hz = 10.0f;
-	float climb_rate_mps = 5.0f;
-	float land_rate_mps = 1.0f;
-	float arm_target_altitude_m = 20.0f;
-	int rx_poll_timeout_ms = 5;
+	uint16_t drone_port = 0;
+	uint16_t gcs_port = 0;
+	float max_velocity_mps = 0.0f;
+	float update_rate_hz = 0.0f;
+	float heartbeat_rate_hz = 0.0f;
+	float position_rate_hz = 0.0f;
+	float climb_rate_mps = 0.0f;
+	float land_rate_mps = 0.0f;
+	float arm_target_altitude_m = 0.0f;
+	int rx_poll_timeout_ms = 0;
 };
 
 namespace app_config {
@@ -151,6 +151,30 @@ inline DroneConfig load_drone_config()
 	set_if_present_from_json_number(*json, "arm_target_altitude_m", cfg.arm_target_altitude_m);
 	set_if_present_from_json_number(*json, "rx_poll_timeout_ms", cfg.rx_poll_timeout_ms);
 	return cfg;
+}
+
+inline bool is_valid(const SharedConfig& cfg)
+{
+	return !cfg.host.empty();
+}
+
+inline bool is_valid(const GcsConfig& cfg)
+{
+	return cfg.gcs_port != 0 && cfg.drone_port != 0 && cfg.poll_timeout_ms > 0;
+}
+
+inline bool is_valid(const DroneConfig& cfg)
+{
+	return cfg.drone_port != 0
+		&& cfg.gcs_port != 0
+		&& cfg.max_velocity_mps > 0.0f
+		&& cfg.update_rate_hz > 0.0f
+		&& cfg.heartbeat_rate_hz > 0.0f
+		&& cfg.position_rate_hz > 0.0f
+		&& cfg.climb_rate_mps > 0.0f
+		&& cfg.land_rate_mps > 0.0f
+		&& cfg.arm_target_altitude_m > 0.0f
+		&& cfg.rx_poll_timeout_ms > 0;
 }
 
 } // namespace app_config
