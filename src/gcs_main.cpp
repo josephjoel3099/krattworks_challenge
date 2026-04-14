@@ -1,5 +1,6 @@
 #include <udp/simple_udp.h>
 
+#include <app_config.h>
 #include <common/mavlink.h>
 
 #include <atomic>
@@ -19,7 +20,10 @@ enum class RequestedMode : uint32_t {
 
 std::atomic_bool g_running{true};
 UdpSocket* g_socket_ptr = nullptr;
-IpAddress g_drone_addr{"127.0.0.1", 14551};
+IpAddress g_drone_addr{};
+SharedConfig g_shared_config;
+GcsConfig g_gcs_config;
+DroneConfig g_drone_config;
 
 void signal_handler(int signum)
 {
@@ -110,7 +114,7 @@ void send_set_mode_command(RequestedMode mode)
 void command_input_thread()
 {
 	std::printf("GCS: Commands available:\n");
-	std::printf("  'a' - ARM drone (will climb to 20m)\n");
+	std::printf("  'a' - ARM drone (target altitude %.1fm)\n", g_drone_config.arm_target_altitude_m);
 	std::printf("  'l' - LAND drone\n");
 	std::printf("  'd' - DISARM drone (lands first if airborne)\n");
 	std::printf("  'q' - quit\n");
@@ -139,7 +143,6 @@ void command_input_thread()
 			g_running = false;
 			break;
 		default:
-			std::printf("GCS: Unknown command '%c'\n", cmd);
 			break;
 		}
 	}
@@ -152,16 +155,37 @@ int main()
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
 
-	constexpr uint16_t kGcsPort = 14550;
+	// Provisioning
+	g_shared_config = app_config::load_shared_config();
+	g_gcs_config = app_config::load_gcs_config();
+	g_drone_config = app_config::load_drone_config();
+
+	if (!app_config::find_config_path("shared_config.json").has_value() || !app_config::is_valid(g_shared_config)) {
+		std::fprintf(stderr, "GCS: shared_config.json is missing or invalid\n");
+		return 1;
+	}
+
+	if (!app_config::find_config_path("gcs_config.json").has_value() || !app_config::is_valid(g_gcs_config)) {
+		std::fprintf(stderr, "GCS: gcs_config.json is missing or invalid\n");
+		return 1;
+	}
+
+	if (!app_config::find_config_path("drone_config.json").has_value() || !app_config::is_valid(g_drone_config)) {
+		std::fprintf(stderr, "GCS: drone_config.json is missing or invalid\n");
+		return 1;
+	}
+
+	g_drone_addr = IpAddress{g_shared_config.host.c_str(), g_gcs_config.drone_port};
+
 	UdpSocket server;
-	if (!server.create(kGcsPort, false)) {
-		std::fprintf(stderr, "GCS: failed to bind UDP server on port %u\n", kGcsPort);
+	if (!server.create(g_gcs_config.gcs_port, false)) {
+		std::fprintf(stderr, "GCS: failed to bind UDP server on port %u\n", g_gcs_config.gcs_port);
 		return 1;
 	}
 
 	g_socket_ptr = &server;
 
-	std::printf("GCS: listening on 127.0.0.1:%u\n", kGcsPort);
+	std::printf("GCS: listening on %s:%u\n", g_shared_config.host.c_str(), g_gcs_config.gcs_port);
 
 	// Start command input thread
 	std::thread cmd_thread(command_input_thread);
@@ -170,7 +194,7 @@ int main()
 	mavlink_status_t parse_status{};
 
 	while (g_running) {
-		if (!server.poll_read(100)) {
+		if (!server.poll_read(g_gcs_config.poll_timeout_ms)) {
 			continue;
 		}
 
