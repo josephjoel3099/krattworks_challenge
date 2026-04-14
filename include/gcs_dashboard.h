@@ -105,6 +105,30 @@ inline bool has_recent_data(const TelemetrySnapshot& telemetry)
 		&& std::chrono::duration_cast<std::chrono::milliseconds>(now - telemetry.last_message_time).count() < 1500;
 }
 
+enum class VehicleMode {
+	Disconnected,
+	GuidedDisarmed,
+	GuidedArmed,
+	Land,
+};
+
+inline VehicleMode vehicle_mode(const TelemetrySnapshot& telemetry)
+{
+	if (!telemetry.has_heartbeat || !has_recent_data(telemetry)) {
+		return VehicleMode::Disconnected;
+	}
+
+	switch (telemetry.custom_mode) {
+	case 2:
+		return VehicleMode::Land;
+	case 1:
+		return VehicleMode::GuidedArmed;
+	case 0:
+	default:
+		return VehicleMode::GuidedDisarmed;
+	}
+}
+
 inline void draw_geofence_overlay(const TelemetrySnapshot& telemetry, const ImVec2& canvas_pos, const ImVec2& canvas_size, float extent)
 {
 	if (!has_complete_geofence(telemetry.geofence)) {
@@ -132,12 +156,15 @@ inline void draw_geofence_overlay(const TelemetrySnapshot& telemetry, const ImVe
 	}
 }
 
-inline void draw_position_plot(const TelemetrySnapshot& telemetry)
+inline void draw_position_plot(const TelemetrySnapshot& telemetry, float requested_height = 420.0f)
 {
 	ImGui::TextUnformatted("2D Position (X/Y)");
 	ImVec2 canvas_size = ImGui::GetContentRegionAvail();
 	canvas_size.x = std::max(canvas_size.x, kMinPlotSize.x);
-	canvas_size.y = std::max(std::min(canvas_size.y, 420.0f), kMinPlotSize.y);
+	canvas_size.y = std::min(canvas_size.y, std::max(requested_height, 0.0f));
+	if (canvas_size.y <= 0.0f) {
+		return;
+	}
 
 	const ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
 	ImDrawList* draw_list = ImGui::GetWindowDrawList();
@@ -178,13 +205,16 @@ inline void draw_position_plot(const TelemetrySnapshot& telemetry)
 	ImGui::InvisibleButton("position_plot", canvas_size);
 }
 
-inline void draw_altitude_plot(const TelemetrySnapshot& telemetry)
+inline void draw_altitude_plot(const TelemetrySnapshot& telemetry, float requested_height = 260.0f)
 {
 	ImGui::Spacing();
 	ImGui::TextUnformatted("Altitude Over Time");
 	ImVec2 canvas_size = ImGui::GetContentRegionAvail();
 	canvas_size.x = std::max(canvas_size.x, kMinAltitudePlotSize.x);
-	canvas_size.y = std::max(std::min(canvas_size.y, 260.0f), kMinAltitudePlotSize.y);
+	canvas_size.y = std::min(canvas_size.y, std::max(requested_height, 0.0f));
+	if (canvas_size.y <= 0.0f) {
+		return;
+	}
 
 	const ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
 	ImDrawList* draw_list = ImGui::GetWindowDrawList();
@@ -305,26 +335,81 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 		goto_initialized = true;
 	}
 
-	ImGui::SetNextWindowPos(ImVec2(24.0f, 24.0f), ImGuiCond_Once);
-	ImGui::SetNextWindowSize(ImVec2(1100.0f, 700.0f), ImGuiCond_Once);
+	const ImVec2 panel_margin(24.0f, 24.0f);
+	const ImVec2 desired_panel_size(1400.0f, 920.0f);
+	const ImGuiViewport* viewport = ImGui::GetMainViewport();
+	const ImVec2 panel_pos(
+		viewport->WorkPos.x + panel_margin.x,
+		viewport->WorkPos.y + panel_margin.y);
+	const ImVec2 max_panel_size(
+		std::max(0.0f, viewport->WorkSize.x - panel_margin.x * 2.0f),
+		std::max(0.0f, viewport->WorkSize.y - panel_margin.y * 2.0f));
+	const ImVec2 panel_size(
+		std::min(desired_panel_size.x, max_panel_size.x),
+		std::min(desired_panel_size.y, max_panel_size.y));
+
+	ImGui::SetNextWindowPos(panel_pos, ImGuiCond_Appearing);
+	ImGui::SetNextWindowSize(panel_size, ImGuiCond_Appearing);
 	ImGui::Begin("Ground Control Station", nullptr, ImGuiWindowFlags_NoCollapse);
 
-	ImGui::Text("Link: %s", detail::has_recent_data(state.telemetry) ? "connected" : "waiting for telemetry");
+	const bool is_connected = detail::has_recent_data(state.telemetry);
+	const detail::VehicleMode current_mode = detail::vehicle_mode(state.telemetry);
+	const bool is_disarmed = current_mode == detail::VehicleMode::GuidedDisarmed;
+	const bool is_armed = current_mode == detail::VehicleMode::GuidedArmed || current_mode == detail::VehicleMode::Land;
+	const float button_width = 120.0f;
+	const ImVec4 heartbeat_receiving_color(0.36f, 0.82f, 0.42f, 1.0f);
+	const ImVec4 heartbeat_stale_color(0.74f, 0.20f, 0.20f, 1.0f);
+	const ImVec4 arm_button_color(0.20f, 0.62f, 0.26f, 1.0f);	
+	const ImVec4 arm_button_hovered(0.25f, 0.72f, 0.31f, 1.0f);
+	const ImVec4 arm_button_active(0.17f, 0.52f, 0.22f, 1.0f);
+	const ImVec4 disarm_button_color(0.74f, 0.20f, 0.20f, 1.0f);
+	const ImVec4 disarm_button_hovered(0.82f, 0.25f, 0.25f, 1.0f);
+	const ImVec4 disarm_button_active(0.64f, 0.16f, 0.16f, 1.0f);
+
+	ImGui::TextUnformatted("Heartbeat:");
+	ImGui::SameLine();
+	ImGui::TextColored(
+		is_connected ? heartbeat_receiving_color : heartbeat_stale_color,
+		"%s",
+		is_connected ? "RECEIVING" : "STALE");
 	ImGui::SameLine();
 	ImGui::Text("Host %s  GCS %u  Drone %u", state.host, state.gcs_port, state.drone_port);
 	ImGui::Separator();
+	const char* arm_label = is_armed ? "ARMED" : "ARM";
+	const char* disarm_label = is_disarmed ? "DISARMED" : "DISARM";
 
-	ImGui::BeginDisabled(!state.is_running);
-	if (ImGui::Button("ARM", ImVec2(120.0f, 0.0f)) && actions.on_arm) {
+	if (is_armed) {
+		ImGui::PushStyleColor(ImGuiCol_Button, arm_button_color);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, arm_button_hovered);
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, arm_button_active);
+	}
+	ImGui::BeginDisabled(!state.is_running || is_armed);
+	if (ImGui::Button(arm_label, ImVec2(button_width, 0.0f)) && actions.on_arm) {
 		actions.on_arm();
 	}
-	ImGui::SameLine();
-	if (ImGui::Button("LAND", ImVec2(120.0f, 0.0f)) && actions.on_land) {
-		actions.on_land();
+	ImGui::EndDisabled();
+	if (is_armed) {
+		ImGui::PopStyleColor(3);
 	}
 	ImGui::SameLine();
-	if (ImGui::Button("DISARM", ImVec2(120.0f, 0.0f)) && actions.on_disarm) {
+	if (is_disarmed) {
+		ImGui::PushStyleColor(ImGuiCol_Button, disarm_button_color);
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, disarm_button_hovered);
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, disarm_button_active);
+	}
+	ImGui::BeginDisabled(!state.is_running || is_disarmed);
+	if (ImGui::Button(disarm_label, ImVec2(button_width, 0.0f)) && actions.on_disarm) {
 		actions.on_disarm();
+	}
+	ImGui::EndDisabled();
+	if (is_disarmed) {
+		ImGui::PopStyleColor(3);
+	}
+	ImGui::SameLine();
+	ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - button_width));
+	ImGui::BeginDisabled(!state.is_running);
+	if (ImGui::Button("LAND", ImVec2(button_width, 0.0f)) && actions.on_land) {
+		actions.on_land();
 	}
 	ImGui::EndDisabled();
 
@@ -384,40 +469,30 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 		goto_status.c_str());
 	ImGui::Separator();
 
-	ImGui::Columns(2, "telemetry_columns", false);
-	ImGui::Text("Heartbeat received: %s", state.telemetry.has_heartbeat ? "yes" : "no");
-	ImGui::Text("Position received: %s", state.telemetry.has_position ? "yes" : "no");
-	ImGui::Text(
-		"Geofence received: %u / %zu",
-		state.telemetry.geofence.received_count,
-		detail::geofence_vertex_target_count(state.telemetry.geofence));
-	ImGui::Text("System/Component: %u / %u", state.telemetry.system_id, state.telemetry.component_id);
-	ImGui::Text("Vehicle type: %u", state.telemetry.vehicle_type);
-	ImGui::Text("Base mode: 0x%02X", state.telemetry.base_mode);
-	ImGui::Text("Custom mode: %u", state.telemetry.custom_mode);
-	ImGui::Text("System status: %u", state.telemetry.system_status);
-
-	ImGui::NextColumn();
+	ImGui::Columns(1, "telemetry_columns", false);
 	ImGui::Text("time_boot_ms: %u", state.telemetry.time_boot_ms);
 	ImGui::Text("X: %.2f m", state.telemetry.x);
 	ImGui::Text("Y: %.2f m", state.telemetry.y);
-	ImGui::Text("Z: %.2f m", state.telemetry.z);
+	ImGui::Text("Alt: %.2f m", state.telemetry.z);
 	ImGui::Text("VX: %.2f m/s", state.telemetry.vx);
 	ImGui::Text("VY: %.2f m/s", state.telemetry.vy);
-	ImGui::Text("VZ: %.2f m/s", state.telemetry.vz);
-	if (detail::has_complete_geofence(state.telemetry.geofence)) {
-		for (size_t index = 0; index < detail::geofence_vertex_target_count(state.telemetry.geofence); ++index) {
-			const ImVec2& point = state.telemetry.geofence.vertices[index];
-			ImGui::Text("Fence %zu: X %.2f  Y %.2f", index + 1, point.x, point.y);
-		}
-	} else {
-		ImGui::TextUnformatted("Fence points are being fetched from the drone.");
-	}
-	ImGui::Columns(1);
+	ImGui::Text("VAlt: %.2f m/s", state.telemetry.vz);
+
 	ImGui::Separator();
 
-	detail::draw_position_plot(state.telemetry);
-	detail::draw_altitude_plot(state.telemetry);
+	const float plot_spacing = ImGui::GetStyle().ItemSpacing.y + ImGui::GetTextLineHeightWithSpacing();
+	const float available_plot_height = std::max(ImGui::GetContentRegionAvail().y, 0.0f);
+	const float preferred_position_height = 420.0f;
+	const float preferred_altitude_height = 260.0f;
+	const float preferred_total_height = preferred_position_height + preferred_altitude_height + plot_spacing;
+	const float plot_scale = preferred_total_height > 0.0f
+		? std::min(1.0f, available_plot_height / preferred_total_height)
+		: 1.0f;
+	const float position_plot_height = preferred_position_height * plot_scale;
+	const float altitude_plot_height = preferred_altitude_height * plot_scale;
+
+	detail::draw_position_plot(state.telemetry, position_plot_height);
+	detail::draw_altitude_plot(state.telemetry, altitude_plot_height);
 
 	ImGui::End();
 }
