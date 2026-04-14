@@ -6,7 +6,7 @@
 	"heartbeat_rate_hz": 1.0,
 	"position_rate_hz": 10.0,
 	"climb_rate_mps": 5.0,
-	"land_rate_mps": 1.0,
+	"land_rate_mps": 5.0,
 	"arm_target_altitude_m": 20.0,
 	"rx_poll_timeout_ms": 5
 }
