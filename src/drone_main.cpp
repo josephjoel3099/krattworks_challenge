@@ -4,8 +4,9 @@
 #include <common/mavlink.h>
 #include <drone_telemtry_abc.h>
 
-#include <atomic>
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <csignal>
@@ -13,6 +14,7 @@
 #include <cstdio>
 #include <mutex>
 #include <memory>
+#include <random>
 #include <thread>
 
 std::atomic_bool g_running{true};
@@ -20,14 +22,102 @@ std::atomic_bool g_running{true};
 SharedConfig g_shared_config;
 DroneConfig g_drone_config;
 
+namespace {
+
+constexpr float kAltitudeArrivalToleranceM = 0.5f;
+constexpr float kWaypointArrivalToleranceM = 0.75f;
+constexpr int kWaypointSamplingAttempts = 64;
+
+std::array<XYPoint, 4> sort_geofence_corners(std::array<XYPoint, 4> corners)
+{
+	float center_x = 0.0f;
+	float center_y = 0.0f;
+	for (const auto& corner : corners) {
+		center_x += corner.x;
+		center_y += corner.y;
+	}
+	center_x /= static_cast<float>(corners.size());
+	center_y /= static_cast<float>(corners.size());
+
+	std::sort(corners.begin(), corners.end(), [center_x, center_y](const XYPoint& lhs, const XYPoint& rhs) {
+		return std::atan2(lhs.y - center_y, lhs.x - center_x)
+			< std::atan2(rhs.y - center_y, rhs.x - center_x);
+	});
+
+	return corners;
+}
+
+XYPoint compute_polygon_centroid(const std::array<XYPoint, 4>& polygon)
+{
+	float center_x = 0.0f;
+	float center_y = 0.0f;
+	for (const auto& point : polygon) {
+		center_x += point.x;
+		center_y += point.y;
+	}
+
+	return XYPoint{
+		center_x / static_cast<float>(polygon.size()),
+		center_y / static_cast<float>(polygon.size()),
+	};
+}
+
+bool is_point_inside_polygon(const XYPoint& point, const std::array<XYPoint, 4>& polygon)
+{
+	bool inside = false;
+	for (size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++) {
+		const auto& current = polygon[i];
+		const auto& previous = polygon[j];
+		const bool crosses_scanline = (current.y > point.y) != (previous.y > point.y);
+		if (!crosses_scanline) {
+			continue;
+		}
+
+		const float edge_delta_y = previous.y - current.y;
+		const float interpolated_x = ((previous.x - current.x) * (point.y - current.y) / edge_delta_y) + current.x;
+		if (point.x <= interpolated_x) {
+			inside = !inside;
+		}
+	}
+
+	return inside;
+}
+
+XYPoint sample_random_point_in_geofence(const std::array<XYPoint, 4>& polygon, std::mt19937& random_engine)
+{
+	float min_x = polygon.front().x;
+	float max_x = polygon.front().x;
+	float min_y = polygon.front().y;
+	float max_y = polygon.front().y;
+	for (const auto& point : polygon) {
+		min_x = std::min(min_x, point.x);
+		max_x = std::max(max_x, point.x);
+		min_y = std::min(min_y, point.y);
+		max_y = std::max(max_y, point.y);
+	}
+
+	std::uniform_real_distribution<float> x_dist(min_x, max_x);
+	std::uniform_real_distribution<float> y_dist(min_y, max_y);
+	for (int attempt = 0; attempt < kWaypointSamplingAttempts; ++attempt) {
+		const XYPoint candidate{x_dist(random_engine), y_dist(random_engine)};
+		if (is_point_inside_polygon(candidate, polygon)) {
+			return candidate;
+		}
+	}
+
+	return compute_polygon_centroid(polygon);
+}
+
+} // namespace
+
 // Concrete implementation of DroneTelemetryABC
 class DroneTelemetrySimulator : public DroneTelemetryABC {
 private:
 	mutable std::mutex state_mutex_;
 	float x_ = 0.0f;
 	float y_ = 0.0f;
-	float altitude_ = -5.0f;
-	float target_altitude_ = -5.0f;  // Target altitude for climbing
+	float altitude_ = 0.0f;
+	float target_altitude_ = 0.0f;
 	float vx_ = 0.0f;
 	float vy_ = 0.0f;
 	float vz_ = 0.0f;
@@ -35,22 +125,52 @@ private:
 	float climb_rate_mps_;
 	float land_rate_mps_;
 	float arm_target_altitude_m_;
+	std::array<XYPoint, 4> geofence_corners_;
+	XYPoint waypoint_target_{};
+	bool has_waypoint_target_ = false;
 	MAVMode mode_ = MAVMode::GUIDED_DISARMED;
-	std::chrono::steady_clock::time_point start_time_;
+	std::mt19937 random_engine_;
 	std::chrono::steady_clock::time_point last_update_time_;
+
+	void select_next_waypoint_locked()
+	{
+		const XYPoint current_position{x_, y_};
+		for (int attempt = 0; attempt < kWaypointSamplingAttempts; ++attempt) {
+			const XYPoint candidate = sample_random_point_in_geofence(geofence_corners_, random_engine_);
+			if (std::hypot(candidate.x - current_position.x, candidate.y - current_position.y)
+				< kWaypointArrivalToleranceM * 2.0f) {
+				continue;
+			}
+
+			waypoint_target_ = candidate;
+			has_waypoint_target_ = true;
+			std::printf("\nDrone: new waypoint X=%.2f Y=%.2f\n", waypoint_target_.x, waypoint_target_.y);
+			return;
+		}
+
+		waypoint_target_ = sample_random_point_in_geofence(geofence_corners_, random_engine_);
+		has_waypoint_target_ = true;
+		std::printf("\nDrone: new waypoint X=%.2f Y=%.2f\n", waypoint_target_.x, waypoint_target_.y);
+	}
 
 public:
 	explicit DroneTelemetrySimulator(
 		float max_velocity_mps,
 		float climb_rate_mps,
 		float land_rate_mps,
-		float arm_target_altitude_m)
+		float arm_target_altitude_m,
+		const std::array<XYPoint, 4>& geofence_corners)
 		: max_velocity_mps_(max_velocity_mps),
 		  climb_rate_mps_(climb_rate_mps),
 		  land_rate_mps_(land_rate_mps),
-		  arm_target_altitude_m_(arm_target_altitude_m) {
-		start_time_ = std::chrono::steady_clock::now();
-		last_update_time_ = start_time_;
+		  arm_target_altitude_m_(arm_target_altitude_m),
+		  geofence_corners_(sort_geofence_corners(geofence_corners)),
+		  random_engine_(std::random_device{}()) {
+		const XYPoint launch_position = compute_polygon_centroid(geofence_corners_);
+		x_ = launch_position.x;
+		y_ = launch_position.y;
+		waypoint_target_ = launch_position;
+		last_update_time_ = std::chrono::steady_clock::now();
 	}
 
 	float getX() const override {
@@ -78,14 +198,21 @@ public:
 		if (mode == MAVMode::GUIDED_ARMED && mode_ != MAVMode::GUIDED_ARMED) {
 			// NED convention: negative Z is up.
 			target_altitude_ = -arm_target_altitude_m_;
+			has_waypoint_target_ = false;
+			vx_ = 0.0f;
+			vy_ = 0.0f;
 			std::printf("\nDrone: ARMED - climbing to %.1fm altitude\n", arm_target_altitude_m_);
 		} else if (mode == MAVMode::LAND && mode_ != MAVMode::GUIDED_DISARMED) {
 			target_altitude_ = 0.0f;
+			has_waypoint_target_ = false;
+			vx_ = 0.0f;
+			vy_ = 0.0f;
 			std::printf("\nDrone: LAND mode engaged\n");
 		} else if (mode == MAVMode::GUIDED_DISARMED) {
 			if (altitude_ < -0.5f) {
 				mode_ = MAVMode::LAND;
 				target_altitude_ = 0.0f;
+				has_waypoint_target_ = false;
 				std::printf("\nDrone: DISARM requested while airborne - entering LAND mode\n");
 				return;
 			}
@@ -95,6 +222,7 @@ public:
 			vx_ = 0.0f;
 			vy_ = 0.0f;
 			vz_ = 0.0f;
+			has_waypoint_target_ = false;
 			std::printf("\nDrone: DISARMED\n");
 		}
 		mode_ = mode;
@@ -147,7 +275,6 @@ public:
 			dt = 0.01f;
 		}
 		last_update_time_ = now;
-		const float t = std::chrono::duration<float>(now - start_time_).count();
 		
 		// If armed, climb towards target altitude.
 		if (mode_ == MAVMode::GUIDED_ARMED) {
@@ -175,16 +302,40 @@ public:
 			vz_ = 0.0f;
 		}
 		
-		// Simulate circular movement pattern only when armed.
-		if (mode_ == MAVMode::GUIDED_ARMED) {
-			x_ = std::sin(t) * max_velocity_mps_;
-			y_ = std::cos(t) * max_velocity_mps_;
-			vx_ = std::cos(t) * max_velocity_mps_;
-			vy_ = -std::sin(t) * max_velocity_mps_;
+		// After reaching the commanded altitude, move between random waypoints inside the geofence.
+		if (mode_ == MAVMode::GUIDED_ARMED && std::abs(target_altitude_ - altitude_) <= kAltitudeArrivalToleranceM) {
+			if (!has_waypoint_target_) {
+				select_next_waypoint_locked();
+			}
+
+			const float delta_x = waypoint_target_.x - x_;
+			const float delta_y = waypoint_target_.y - y_;
+			const float remaining_distance = std::hypot(delta_x, delta_y);
+			if (remaining_distance <= kWaypointArrivalToleranceM) {
+				x_ = waypoint_target_.x;
+				y_ = waypoint_target_.y;
+				vx_ = 0.0f;
+				vy_ = 0.0f;
+				select_next_waypoint_locked();
+			} else {
+				const float max_step = max_velocity_mps_ * dt;
+				const float step = std::min(remaining_distance, max_step);
+				const float direction_x = delta_x / remaining_distance;
+				const float direction_y = delta_y / remaining_distance;
+				const float step_x = direction_x * step;
+				const float step_y = direction_y * step;
+				x_ += step_x;
+				y_ += step_y;
+				vx_ = step_x / dt;
+				vy_ = step_y / dt;
+			}
 		} else {
-			// During land/disarmed, hold position and do not translate.
+			// During climb, land, and disarmed states, hold XY position.
 			vx_ = 0.0f;
 			vy_ = 0.0f;
+			if (mode_ != MAVMode::GUIDED_ARMED) {
+				has_waypoint_target_ = false;
+			}
 		}
 	}
 
@@ -391,6 +542,10 @@ int main()
 			g_drone_config.climb_rate_mps,
 			g_drone_config.land_rate_mps,
 			g_drone_config.arm_target_altitude_m);
+		for (size_t i = 0; i < g_drone_config.geofence_corners_m.size(); ++i) {
+			const auto& corner = g_drone_config.geofence_corners_m[i];
+			std::printf("Drone: geofence corner %zu -> X=%.2f Y=%.2f\n", i + 1, corner.x, corner.y);
+		}
 	} else {
 		std::printf(
 			"Drone: drone_config.json not found; using defaults (climb_rate_mps=%.2f, land_rate_mps=%.2f, arm_target_altitude_m=%.2f)\n",
@@ -403,7 +558,8 @@ int main()
 		g_drone_config.max_velocity_mps,
 		g_drone_config.climb_rate_mps,
 		g_drone_config.land_rate_mps,
-		g_drone_config.arm_target_altitude_m);
+		g_drone_config.arm_target_altitude_m,
+		g_drone_config.geofence_corners_m);
 
 	const IpAddress gcs_addr{g_shared_config.host.c_str(), g_drone_config.gcs_port};
 
