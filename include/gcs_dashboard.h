@@ -1,6 +1,7 @@
 #ifndef GCS_DASHBOARD_H
 #define GCS_DASHBOARD_H
 
+#include <app_config.h>
 #include <gcs_ui_types.h>
 
 #include <imgui.h>
@@ -9,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 namespace gcs_ui {
@@ -29,6 +31,24 @@ inline bool has_complete_geofence(const GeofenceSnapshot& geofence)
 {
 	const size_t target_count = geofence_vertex_target_count(geofence);
 	return target_count >= 3 && geofence.received_count >= target_count;
+}
+
+inline std::array<XYPoint, 4> geofence_vertices_as_xy(const GeofenceSnapshot& geofence)
+{
+	std::array<XYPoint, 4> polygon{};
+	for (size_t index = 0; index < polygon.size(); ++index) {
+		polygon[index] = XYPoint{geofence.vertices[index].x, geofence.vertices[index].y};
+	}
+	return app_config::sort_geofence_corners(polygon);
+}
+
+inline bool is_point_inside_geofence(const GeofenceSnapshot& geofence, float x, float y)
+{
+	if (!has_complete_geofence(geofence)) {
+		return false;
+	}
+
+	return app_config::is_point_inside_polygon(XYPoint{x, y}, geofence_vertices_as_xy(geofence));
 }
 
 inline float compute_plot_extent(const TelemetrySnapshot& telemetry)
@@ -156,6 +176,20 @@ inline void draw_position_plot(const TelemetrySnapshot& telemetry)
 
 inline void render_dashboard(const DashboardState& state, const DashboardActions& actions)
 {
+	static float goto_x = 0.0f;
+	static float goto_y = 0.0f;
+	static float goto_altitude_m = 20.0f;
+	static bool goto_initialized = false;
+	static std::string goto_status = "Waiting for geofence";
+	static bool goto_status_is_error = false;
+
+	if (!goto_initialized && state.telemetry.has_position) {
+		goto_x = state.telemetry.x;
+		goto_y = state.telemetry.y;
+		goto_altitude_m = std::max(state.arm_target_altitude_m, -state.telemetry.z);
+		goto_initialized = true;
+	}
+
 	ImGui::SetNextWindowPos(ImVec2(24.0f, 24.0f), ImGuiCond_Once);
 	ImGui::SetNextWindowSize(ImVec2(1100.0f, 700.0f), ImGuiCond_Once);
 	ImGui::Begin("Ground Control Station", nullptr, ImGuiWindowFlags_NoCollapse);
@@ -184,6 +218,59 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 	ImGui::EndDisabled();
 
 	ImGui::Text("Arm target altitude: %.1f m", state.arm_target_altitude_m);
+	const bool geofence_ready = detail::has_complete_geofence(state.telemetry.geofence);
+	const bool goto_inside_geofence = detail::is_point_inside_geofence(state.telemetry.geofence, goto_x, goto_y);
+	const bool goto_altitude_valid = goto_altitude_m >= 0.0f;
+	ImGui::Separator();
+	ImGui::TextUnformatted("Override Goto Command");
+	ImGui::SetNextItemWidth(140.0f);
+	ImGui::InputFloat("Target X", &goto_x, 0.5f, 2.0f, "%.2f");
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(140.0f);
+	ImGui::InputFloat("Target Y", &goto_y, 0.5f, 2.0f, "%.2f");
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(140.0f);
+	ImGui::InputFloat("Target Alt (m)", &goto_altitude_m, 1.0f, 5.0f, "%.1f");
+	ImGui::SameLine();
+	ImGui::BeginDisabled(!state.is_running || !geofence_ready || !goto_inside_geofence || !goto_altitude_valid);
+	if (ImGui::Button("Send Goto CMD", ImVec2(160.0f, 0.0f)) && actions.on_send_goto) {
+		if (actions.on_send_goto(goto_x, goto_y, goto_altitude_m)) {
+			char buffer[128];
+			std::snprintf(
+				buffer,
+				sizeof(buffer),
+				"Queued MAV_CMD_OVERRIDE_GOTO to X %.2f Y %.2f Alt %.1f m",
+				goto_x,
+				goto_y,
+				goto_altitude_m);
+			goto_status = buffer;
+			goto_status_is_error = false;
+		} else {
+			goto_status = "Goto command rejected by GCS";
+			goto_status_is_error = true;
+		}
+	}
+	ImGui::EndDisabled();
+	if (geofence_ready) {
+		goto_status = "Geofence received";
+		goto_status_is_error = false;
+	} else if (!geofence_ready) {
+		goto_status = "Goto command disabled until full geofence is received";
+		goto_status_is_error = true;
+	} else if (!goto_inside_geofence) {
+		goto_status = "Target is outside the geofence";
+		goto_status_is_error = true;
+	} else if (!goto_altitude_valid) {
+		goto_status = "Target altitude must be zero or higher";
+		goto_status_is_error = true;
+	} else {
+		goto_status = "Unexpected state";
+		goto_status_is_error = true;
+	}
+	ImGui::TextColored(
+		goto_status_is_error ? ImVec4(0.95f, 0.45f, 0.35f, 1.0f) : ImVec4(0.45f, 0.85f, 0.60f, 1.0f),
+		"%s",
+		goto_status.c_str());
 	ImGui::Separator();
 
 	ImGui::Columns(2, "telemetry_columns", false);

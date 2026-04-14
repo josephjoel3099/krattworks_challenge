@@ -53,6 +53,7 @@ struct DashboardActions {
 	std::function<void()> on_arm;
 	std::function<void()> on_land;
 	std::function<void()> on_disarm;
+	std::function<bool(float, float, float)> on_send_goto;
 	std::function<void()> on_clear_track;
 };
 
