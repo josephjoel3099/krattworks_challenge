@@ -2,15 +2,23 @@
 
 #include <app_config.h>
 #include <common/mavlink.h>
+#include <gcs_gui_host.h>
 
 #include <atomic>
 #include <csignal>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
+#include <mutex>
 #include <thread>
-#include <string>
 
 namespace {
+
+using gcs_ui::DashboardActions;
+using gcs_ui::DashboardState;
+using gcs_ui::GuiHost;
+using gcs_ui::TelemetrySnapshot;
 
 enum class RequestedMode : uint32_t {
 	GuidedDisarmed = 0,
@@ -18,12 +26,18 @@ enum class RequestedMode : uint32_t {
 	Land = 2,
 };
 
-std::atomic_bool g_running{true};
-UdpSocket* g_socket_ptr = nullptr;
 IpAddress g_drone_addr{};
 SharedConfig g_shared_config;
 GcsConfig g_gcs_config;
 DroneConfig g_drone_config;
+TelemetrySnapshot g_telemetry;
+
+std::atomic_bool g_running{true};
+std::mutex g_telemetry_mutex;
+std::mutex g_command_mutex;
+std::deque<RequestedMode> g_pending_commands;
+
+constexpr size_t kMaxHistoryPoints = 512;
 
 void signal_handler(int signum)
 {
@@ -32,52 +46,90 @@ void signal_handler(int signum)
 	}
 }
 
+const char* mode_label(RequestedMode mode)
+{
+	switch (mode) {
+	case RequestedMode::GuidedArmed:
+		return "ARM";
+	case RequestedMode::Land:
+		return "LAND";
+	case RequestedMode::GuidedDisarmed:
+	default:
+		return "DISARM";
+	}
+}
+
+void queue_mode_command(RequestedMode mode)
+{
+	std::lock_guard<std::mutex> lock(g_command_mutex);
+	g_pending_commands.push_back(mode);
+}
+
+bool pop_mode_command(RequestedMode& mode)
+{
+	std::lock_guard<std::mutex> lock(g_command_mutex);
+	if (g_pending_commands.empty()) {
+		return false;
+	}
+
+	mode = g_pending_commands.front();
+	g_pending_commands.pop_front();
+	return true;
+}
+
+void update_heartbeat(const mavlink_message_t& msg)
+{
+	mavlink_heartbeat_t hb{};
+	mavlink_msg_heartbeat_decode(&msg, &hb);
+
+	std::lock_guard<std::mutex> lock(g_telemetry_mutex);
+	g_telemetry.system_id = msg.sysid;
+	g_telemetry.component_id = msg.compid;
+	g_telemetry.vehicle_type = hb.type;
+	g_telemetry.base_mode = hb.base_mode;
+	g_telemetry.custom_mode = hb.custom_mode;
+	g_telemetry.system_status = hb.system_status;
+	g_telemetry.has_heartbeat = true;
+	g_telemetry.last_message_time = std::chrono::steady_clock::now();
+}
+
+void update_local_position(const mavlink_message_t& msg)
+{
+	mavlink_local_position_ned_t pos{};
+	mavlink_msg_local_position_ned_decode(&msg, &pos);
+
+	std::lock_guard<std::mutex> lock(g_telemetry_mutex);
+	g_telemetry.time_boot_ms = pos.time_boot_ms;
+	g_telemetry.x = pos.x;
+	g_telemetry.y = pos.y;
+	g_telemetry.z = pos.z;
+	g_telemetry.vx = pos.vx;
+	g_telemetry.vy = pos.vy;
+	g_telemetry.vz = pos.vz;
+	g_telemetry.has_position = true;
+	g_telemetry.last_message_time = std::chrono::steady_clock::now();
+	g_telemetry.position_history.emplace_back(pos.x, pos.y);
+	if (g_telemetry.position_history.size() > kMaxHistoryPoints) {
+		g_telemetry.position_history.pop_front();
+	}
+}
+
 void handle_mavlink_message(const mavlink_message_t& msg)
 {
 	switch (msg.msgid) {
-	case MAVLINK_MSG_ID_HEARTBEAT: {
-		mavlink_heartbeat_t hb{};
-		mavlink_msg_heartbeat_decode(&msg, &hb);
-		static bool hb_tick = false;
-		hb_tick = !hb_tick;
-		std::printf(
-			"\rGCS: HEARTBEAT [%c] sys=%u comp=%u type=%u mode=0x%02X custom=%u state=%u   ",
-			hb_tick ? '*' : ' ',
-			msg.sysid,
-			msg.compid,
-			hb.type,
-			hb.base_mode,
-			hb.custom_mode,
-			hb.system_status);
-		std::fflush(stdout);
+	case MAVLINK_MSG_ID_HEARTBEAT:
+		update_heartbeat(msg);
 		break;
-	}
-	case MAVLINK_MSG_ID_LOCAL_POSITION_NED: {
-		mavlink_local_position_ned_t pos{};
-		mavlink_msg_local_position_ned_decode(&msg, &pos);
-		static bool pos_tick = false;
-		pos_tick = !pos_tick;
-		std::printf(
-			"\rGCS: LOCAL_POSITION_NED [%c] t=%u x=%.2f y=%.2f z=%.2f vx=%.2f vy=%.2f vz=%.2f   ",
-			pos_tick ? '*' : ' ',
-			pos.time_boot_ms,
-			pos.x,
-			pos.y,
-			pos.z,
-			pos.vx,
-			pos.vy,
-			pos.vz);
-		std::fflush(stdout);
+	case MAVLINK_MSG_ID_LOCAL_POSITION_NED:
+		update_local_position(msg);
 		break;
-	}
 	default:
 		break;
 	}
 }
 
-void send_set_mode_command(RequestedMode mode)
+void send_set_mode_command(UdpSocket& socket, RequestedMode mode)
 {
-	if (!g_socket_ptr) return;
 
 	constexpr uint8_t kGcsSystemId = 255;
 	constexpr uint8_t kGcsComponentId = MAV_COMP_ID_SYSTEM_CONTROL;
@@ -99,53 +151,86 @@ void send_set_mode_command(RequestedMode mode)
 
 	uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
 	const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &msg);
-	g_socket_ptr->sendto(tx_buf, len, g_drone_addr);
+	socket.sendto(tx_buf, len, g_drone_addr);
 
-	const char* label = "DISARM";
-	if (mode == RequestedMode::GuidedArmed) {
-		label = "ARM";
-	} else if (mode == RequestedMode::Land) {
-		label = "LAND";
-	}
-
-	std::printf("GCS: Sent SET_MODE command - %s\n", label);
+	std::printf("GCS: Sent SET_MODE command - %s\n", mode_label(mode));
 }
 
-void command_input_thread()
+void mavlink_worker()
 {
-	std::printf("GCS: Commands available:\n");
-	std::printf("  'a' - ARM drone (target altitude %.1fm)\n", g_drone_config.arm_target_altitude_m);
-	std::printf("  'l' - LAND drone\n");
-	std::printf("  'd' - DISARM drone (lands first if airborne)\n");
-	std::printf("  'q' - quit\n");
+	UdpSocket server;
+	if (!server.create(g_gcs_config.gcs_port, false)) {
+		std::fprintf(stderr, "GCS: failed to bind UDP server on port %u\n", g_gcs_config.gcs_port);
+		g_running = false;
+		return;
+	}
+
+	std::printf("GCS: listening on %s:%u\n", g_shared_config.host.c_str(), g_gcs_config.gcs_port);
+
+	uint8_t rx_buf[2048];
+	mavlink_status_t parse_status{};
 
 	while (g_running) {
-		char cmd;
-		if (scanf("%c", &cmd) != 1) {
+		RequestedMode requested_mode{};
+		while (pop_mode_command(requested_mode)) {
+			send_set_mode_command(server, requested_mode);
+		}
+
+		if (!server.poll_read(g_gcs_config.poll_timeout_ms)) {
 			continue;
 		}
 
-		switch (cmd) {
-		case 'a':
-		case 'A':
-			send_set_mode_command(RequestedMode::GuidedArmed);
-			break;
-		case 'l':
-		case 'L':
-			send_set_mode_command(RequestedMode::Land);
-			break;
-		case 'd':
-		case 'D':
-			send_set_mode_command(RequestedMode::GuidedDisarmed);
-			break;
-		case 'q':
-		case 'Q':
-			g_running = false;
-			break;
-		default:
-			break;
+		while (server.available() > 0) {
+			IpAddress from;
+			const int bytes = server.recvfrom(rx_buf, sizeof(rx_buf), from);
+			if (bytes <= 0) {
+				continue;
+			}
+
+			for (int i = 0; i < bytes; ++i) {
+				mavlink_message_t msg;
+				if (mavlink_parse_char(MAVLINK_COMM_0, rx_buf[i], &msg, &parse_status)) {
+					handle_mavlink_message(msg);
+				}
+			}
 		}
 	}
+
+	server.close();
+}
+
+TelemetrySnapshot get_telemetry_snapshot()
+{
+	std::lock_guard<std::mutex> lock(g_telemetry_mutex);
+	return g_telemetry;
+}
+
+void clear_position_history()
+{
+	std::lock_guard<std::mutex> lock(g_telemetry_mutex);
+	g_telemetry.position_history.clear();
+}
+
+DashboardState make_dashboard_state()
+{
+	DashboardState state;
+	state.host = g_shared_config.host.c_str();
+	state.gcs_port = g_gcs_config.gcs_port;
+	state.drone_port = g_gcs_config.drone_port;
+	state.arm_target_altitude_m = g_drone_config.arm_target_altitude_m;
+	state.is_running = g_running.load();
+	state.telemetry = get_telemetry_snapshot();
+	return state;
+}
+
+DashboardActions make_dashboard_actions()
+{
+	DashboardActions actions;
+	actions.on_arm = [] { queue_mode_command(RequestedMode::GuidedArmed); };
+	actions.on_land = [] { queue_mode_command(RequestedMode::Land); };
+	actions.on_disarm = [] { queue_mode_command(RequestedMode::GuidedDisarmed); };
+	actions.on_clear_track = [] { clear_position_history(); };
+	return actions;
 }
 
 } // namespace
@@ -177,45 +262,21 @@ int main()
 
 	g_drone_addr = IpAddress{g_shared_config.host.c_str(), g_gcs_config.drone_port};
 
-	UdpSocket server;
-	if (!server.create(g_gcs_config.gcs_port, false)) {
-		std::fprintf(stderr, "GCS: failed to bind UDP server on port %u\n", g_gcs_config.gcs_port);
+	GuiHost gui;
+	if (!gui.initialize()) {
 		return 1;
 	}
 
-	g_socket_ptr = &server;
+	std::thread mavlink_thread(mavlink_worker);
 
-	std::printf("GCS: listening on %s:%u\n", g_shared_config.host.c_str(), g_gcs_config.gcs_port);
-
-	// Start command input thread
-	std::thread cmd_thread(command_input_thread);
-
-	uint8_t rx_buf[2048];
-	mavlink_status_t parse_status{};
-
-	while (g_running) {
-		if (!server.poll_read(g_gcs_config.poll_timeout_ms)) {
-			continue;
-		}
-
-		while (server.available() > 0) {
-			IpAddress from;
-			const int bytes = server.recvfrom(rx_buf, sizeof(rx_buf), from);
-			if (bytes <= 0) {
-				continue;
-			}
-
-			for (int i = 0; i < bytes; ++i) {
-				mavlink_message_t msg;
-				if (mavlink_parse_char(MAVLINK_COMM_0, rx_buf[i], &msg, &parse_status)) {
-					handle_mavlink_message(msg);
-				}
-			}
-		}
+	while (g_running && !gui.should_close()) {
+		gui.begin_frame();
+		gui.render_dashboard(make_dashboard_state(), make_dashboard_actions());
+		gui.end_frame();
 	}
 
-	cmd_thread.join();
-	server.close();
+	g_running = false;
+	mavlink_thread.join();
 	std::printf("GCS: stopped\n");
 	return 0;
 }
