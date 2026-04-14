@@ -356,6 +356,8 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 	const detail::VehicleMode current_mode = detail::vehicle_mode(state.telemetry);
 	const bool is_disarmed = current_mode == detail::VehicleMode::GuidedDisarmed;
 	const bool is_armed = current_mode == detail::VehicleMode::GuidedArmed || current_mode == detail::VehicleMode::Land;
+	const bool teleop_allowed = state.is_running && is_connected && current_mode == detail::VehicleMode::GuidedArmed;
+	const bool teleop_enabled = state.teleop_enabled && teleop_allowed;
 	const float button_width = 120.0f;
 	const ImVec4 heartbeat_receiving_color(0.36f, 0.82f, 0.42f, 1.0f);
 	const ImVec4 heartbeat_stale_color(0.74f, 0.20f, 0.20f, 1.0f);
@@ -413,12 +415,38 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 	}
 	ImGui::EndDisabled();
 
-	ImGui::Text("Arm target altitude: %.1f m", state.arm_target_altitude_m);
+	if (!teleop_allowed && state.teleop_enabled && actions.on_set_teleop_enabled) {
+		actions.on_set_teleop_enabled(false);
+	}
+
+	float teleop_x_axis = 0.0f;
+	float teleop_y_axis = 0.0f;
+	float teleop_z_axis = 0.0f;
+	if (teleop_enabled) {
+		teleop_x_axis += ImGui::IsKeyDown(ImGuiKey_D) ? 1.0f : 0.0f;
+		teleop_x_axis -= ImGui::IsKeyDown(ImGuiKey_A) ? 1.0f : 0.0f;
+		teleop_y_axis += ImGui::IsKeyDown(ImGuiKey_W) ? 1.0f : 0.0f;
+		teleop_y_axis -= ImGui::IsKeyDown(ImGuiKey_S) ? 1.0f : 0.0f;
+		teleop_z_axis += ImGui::IsKeyDown(ImGuiKey_Q) ? 1.0f : 0.0f;
+		teleop_z_axis -= ImGui::IsKeyDown(ImGuiKey_E) ? 1.0f : 0.0f;
+	}
+	if (actions.on_update_teleop_axes) {
+		actions.on_update_teleop_axes(teleop_x_axis, teleop_y_axis, teleop_z_axis);
+	}
+
+	const ImVec4 teleop_color = teleop_enabled
+		? ImVec4(0.45f, 0.85f, 0.60f, 1.0f)
+		: ImVec4(0.95f, 0.45f, 0.35f, 1.0f);
+	const char* teleop_status = teleop_enabled
+		? "Teleop enabled: W/A/S/D move in XY, Q/E move altitude"
+		: (teleop_allowed ? "Teleop disabled" : "Teleop unavailable until drone is armed and telemetry is live");
 	const bool geofence_ready = detail::has_complete_geofence(state.telemetry.geofence);
 	const bool goto_inside_geofence = detail::is_point_inside_geofence(state.telemetry.geofence, goto_x, goto_y);
 	const bool goto_altitude_valid = goto_altitude_m >= 0.0f;
+	const bool goto_disabled_for_teleop = teleop_enabled;
 	ImGui::Separator();
 	ImGui::TextUnformatted("Override Goto Command");
+	ImGui::BeginDisabled(goto_disabled_for_teleop);
 	ImGui::SetNextItemWidth(140.0f);
 	ImGui::InputFloat("Target X", &goto_x, 0.5f, 2.0f, "%.2f");
 	ImGui::SameLine();
@@ -447,7 +475,11 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 		}
 	}
 	ImGui::EndDisabled();
-	if (geofence_ready && goto_inside_geofence && goto_altitude_valid) {
+	ImGui::EndDisabled();
+	if (goto_disabled_for_teleop) {
+		goto_status = "Goto disabled while teleop is enabled";
+		goto_status_is_error = true;
+	} else if (geofence_ready && goto_inside_geofence && goto_altitude_valid) {
 		goto_status = "Geofence received - ready to send Goto command";
 		goto_status_is_error = false;
 	} else if (!geofence_ready) {
@@ -469,7 +501,8 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 		goto_status.c_str());
 	ImGui::Separator();
 
-	ImGui::Columns(1, "telemetry_columns", false);
+	ImGui::Columns(2, "telemetry_columns", false);
+	ImGui::SetColumnWidth(0, 240.0f);
 	ImGui::Text("time_boot_ms: %u", state.telemetry.time_boot_ms);
 	ImGui::Text("X: %.2f m", state.telemetry.x);
 	ImGui::Text("Y: %.2f m", state.telemetry.y);
@@ -477,6 +510,22 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 	ImGui::Text("VX: %.2f m/s", state.telemetry.vx);
 	ImGui::Text("VY: %.2f m/s", state.telemetry.vy);
 	ImGui::Text("VAlt: %.2f m/s", state.telemetry.vz);
+
+	ImGui::NextColumn();
+	ImGui::TextUnformatted("Teleop");
+	ImGui::BeginDisabled(!teleop_allowed && !state.teleop_enabled);
+	if (ImGui::Button(teleop_enabled ? "Disable Teleop" : "Enable Teleop", ImVec2(160.0f, 0.0f))
+		&& actions.on_set_teleop_enabled) {
+		actions.on_set_teleop_enabled(!teleop_enabled);
+	}
+	ImGui::EndDisabled();
+	ImGui::TextColored(teleop_color, "%s", teleop_status);
+	ImGui::TextUnformatted("Keys: W/A/S/D = XY, Q/E = Alt");
+	ImGui::Text("X Axis: %.0f", teleop_x_axis);
+	ImGui::Text("Y Axis: %.0f", teleop_y_axis);
+	ImGui::Text("Z Axis: %.0f", teleop_z_axis);
+	ImGui::NextColumn();
+	ImGui::Columns(1);
 
 	ImGui::Separator();
 

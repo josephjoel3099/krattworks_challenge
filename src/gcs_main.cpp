@@ -40,6 +40,13 @@ struct PendingCommand {
 	float target_altitude_ned_m = 0.0f;
 };
 
+struct TeleopState {
+	bool enabled = false;
+	float x_axis = 0.0f;
+	float y_axis = 0.0f;
+	float z_axis = 0.0f;
+};
+
 IpAddress g_drone_addr{};
 SharedConfig g_shared_config;
 GcsConfig g_gcs_config;
@@ -49,7 +56,9 @@ TelemetrySnapshot g_telemetry;
 std::atomic_bool g_running{true};
 std::mutex g_telemetry_mutex;
 std::mutex g_command_mutex;
+std::mutex g_teleop_mutex;
 std::deque<PendingCommand> g_pending_commands;
+TeleopState g_teleop_state;
 
 constexpr size_t kMaxAltitudeHistoryPoints = 512;
 constexpr uint8_t kGcsSystemId = 255;
@@ -57,6 +66,7 @@ constexpr uint8_t kGcsComponentId = MAV_COMP_ID_SYSTEM_CONTROL;
 constexpr uint8_t kDroneSystemId = 1;
 constexpr uint8_t kDroneComponentId = MAV_COMP_ID_AUTOPILOT1;
 constexpr auto kGeofenceFetchInterval = std::chrono::milliseconds(250);
+constexpr auto kManualControlInterval = std::chrono::milliseconds(50);
 constexpr float kArmedHoldAltitudeM = 20.0f;
 
 void signal_handler(int signum)
@@ -81,6 +91,11 @@ const char* mode_label(RequestedMode mode)
 
 void queue_mode_command(RequestedMode mode)
 {
+	if (mode != RequestedMode::GuidedArmed) {
+		std::lock_guard<std::mutex> teleop_lock(g_teleop_mutex);
+		g_teleop_state = {};
+	}
+
 	std::lock_guard<std::mutex> lock(g_command_mutex);
 	g_pending_commands.push_back(PendingCommand{
 		PendingCommandType::ModeChange,
@@ -88,6 +103,38 @@ void queue_mode_command(RequestedMode mode)
 		{},
 		-kArmedHoldAltitudeM,
 	});
+}
+
+void set_teleop_enabled(bool enabled)
+{
+	std::lock_guard<std::mutex> lock(g_teleop_mutex);
+	g_teleop_state.enabled = enabled;
+	if (!enabled) {
+		g_teleop_state.x_axis = 0.0f;
+		g_teleop_state.y_axis = 0.0f;
+		g_teleop_state.z_axis = 0.0f;
+	}
+}
+
+void update_teleop_axes(float x_axis, float y_axis, float z_axis)
+{
+	std::lock_guard<std::mutex> lock(g_teleop_mutex);
+	if (!g_teleop_state.enabled) {
+		g_teleop_state.x_axis = 0.0f;
+		g_teleop_state.y_axis = 0.0f;
+		g_teleop_state.z_axis = 0.0f;
+		return;
+	}
+
+	g_teleop_state.x_axis = std::clamp(x_axis, -1.0f, 1.0f);
+	g_teleop_state.y_axis = std::clamp(y_axis, -1.0f, 1.0f);
+	g_teleop_state.z_axis = std::clamp(z_axis, -1.0f, 1.0f);
+}
+
+TeleopState get_teleop_state()
+{
+	std::lock_guard<std::mutex> lock(g_teleop_mutex);
+	return g_teleop_state;
 }
 
 bool queue_override_goto_command(float x, float y, float altitude_m)
@@ -284,6 +331,38 @@ void send_geofence_fetch_request(UdpSocket& socket, uint8_t point_index)
 	socket.sendto(tx_buf, len, g_drone_addr);
 }
 
+void send_manual_control(UdpSocket& socket, const TeleopState& teleop_state)
+{
+	mavlink_message_t msg;
+	const int16_t x = static_cast<int16_t>(std::lround(std::clamp(teleop_state.x_axis, -1.0f, 1.0f) * 1000.0f));
+	const int16_t y = static_cast<int16_t>(std::lround(std::clamp(teleop_state.y_axis, -1.0f, 1.0f) * 1000.0f));
+	const int16_t z = static_cast<int16_t>(std::lround(std::clamp(teleop_state.z_axis, -1.0f, 1.0f) * 1000.0f));
+	mavlink_msg_manual_control_pack(
+		kGcsSystemId,
+		kGcsComponentId,
+		&msg,
+		kDroneSystemId,
+		x,
+		y,
+		z,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0);
+
+	uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
+	const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &msg);
+	socket.sendto(tx_buf, len, g_drone_addr);
+}
+
 void request_geofence_if_needed(UdpSocket& socket)
 {
 	static auto last_request_time = std::chrono::steady_clock::time_point{};
@@ -314,6 +393,7 @@ void mavlink_worker()
 
 	uint8_t rx_buf[2048];
 	mavlink_status_t parse_status{};
+	auto last_manual_control_time = std::chrono::steady_clock::time_point{};
 
 	while (g_running) {
 		PendingCommand command{};
@@ -326,6 +406,15 @@ void mavlink_worker()
 		}
 
 		request_geofence_if_needed(server);
+
+		const TeleopState teleop_state = get_teleop_state();
+		const auto now = std::chrono::steady_clock::now();
+		if (teleop_state.enabled
+			&& (last_manual_control_time.time_since_epoch().count() == 0
+				|| now - last_manual_control_time >= kManualControlInterval)) {
+			send_manual_control(server, teleop_state);
+			last_manual_control_time = now;
+		}
 
 		if (!server.poll_read(g_gcs_config.poll_timeout_ms)) {
 			continue;
@@ -364,6 +453,7 @@ DashboardState make_dashboard_state()
 	state.drone_port = g_gcs_config.drone_port;
 	state.arm_target_altitude_m = kArmedHoldAltitudeM;
 	state.is_running = g_running.load();
+	state.teleop_enabled = get_teleop_state().enabled;
 	state.telemetry = get_telemetry_snapshot();
 	return state;
 }
@@ -376,6 +466,10 @@ DashboardActions make_dashboard_actions()
 	actions.on_disarm = [] { queue_mode_command(RequestedMode::GuidedDisarmed); };
 	actions.on_send_goto = [](float x, float y, float altitude_m) {
 		return queue_override_goto_command(x, y, altitude_m);
+	};
+	actions.on_set_teleop_enabled = [](bool enabled) { set_teleop_enabled(enabled); };
+	actions.on_update_teleop_axes = [](float x_axis, float y_axis, float z_axis) {
+		update_teleop_axes(x_axis, y_axis, z_axis);
 	};
 	return actions;
 }

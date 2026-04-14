@@ -51,6 +51,7 @@ struct DashboardState {
 	uint16_t drone_port = 0;
 	float arm_target_altitude_m = 0.0f;
 	bool is_running = false;
+	bool teleop_enabled = false;
 	TelemetrySnapshot telemetry;
 };
 
@@ -59,6 +60,8 @@ struct DashboardActions {
 	std::function<void()> on_land;
 	std::function<void()> on_disarm;
 	std::function<bool(float, float, float)> on_send_goto;
+	std::function<void(bool)> on_set_teleop_enabled;
+	std::function<void(float, float, float)> on_update_teleop_axes;
 };
 
 } // namespace gcs_ui
