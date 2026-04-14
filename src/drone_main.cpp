@@ -23,7 +23,6 @@ DroneConfig g_drone_config;
 
 namespace {
 
-constexpr float kAltitudeArrivalToleranceM = 0.5f;
 constexpr float kHorizontalArrivalToleranceM = 0.75f;
 constexpr uint8_t kDroneSystemId = 1;
 constexpr uint8_t kDroneComponentId = MAV_COMP_ID_AUTOPILOT1;
@@ -228,8 +227,8 @@ public:
 			vz_ = 0.0f;
 		}
 		
-		// After reaching the commanded altitude, move only to the commanded hold target.
-		if (mode_ == MAVMode::GUIDED_ARMED && std::abs(target_altitude_ - altitude_) <= kAltitudeArrivalToleranceM) {
+		// In guided mode, move toward the commanded XY target while altitude is tracked independently.
+		if (mode_ == MAVMode::GUIDED_ARMED) {
 			const float delta_x = hold_target_.x - x_;
 			const float delta_y = hold_target_.y - y_;
 			const float remaining_distance = std::hypot(delta_x, delta_y);
