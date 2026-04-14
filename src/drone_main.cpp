@@ -24,6 +24,7 @@ DroneConfig g_drone_config;
 namespace {
 
 constexpr float kHorizontalArrivalToleranceM = 0.75f;
+constexpr auto kManualControlTimeout = std::chrono::milliseconds(250);
 constexpr uint8_t kDroneSystemId = 1;
 constexpr uint8_t kDroneComponentId = MAV_COMP_ID_AUTOPILOT1;
 constexpr uint8_t kGcsSystemId = 255;
@@ -49,6 +50,11 @@ private:
 	std::array<XYPoint, 4> geofence_corners_;
 	XYPoint hold_target_{};
 	MAVMode mode_ = MAVMode::GUIDED_DISARMED;
+	bool manual_control_active_ = false;
+	float manual_x_input_ = 0.0f;
+	float manual_y_input_ = 0.0f;
+	float manual_z_input_ = 0.0f;
+	std::chrono::steady_clock::time_point last_manual_control_time_{};
 	std::chrono::steady_clock::time_point last_update_time_;
 
 public:
@@ -122,6 +128,12 @@ public:
 			hold_target_ = XYPoint{x_, y_};
 			std::printf("\nDrone: DISARMED\n");
 		}
+		if (mode != MAVMode::GUIDED_ARMED) {
+			manual_control_active_ = false;
+			manual_x_input_ = 0.0f;
+			manual_y_input_ = 0.0f;
+			manual_z_input_ = 0.0f;
+		}
 		mode_ = mode;
 	}
 
@@ -150,7 +162,27 @@ public:
 	void holdCurrentPosition()
 	{
 		std::lock_guard<std::mutex> lock(state_mutex_);
+		manual_control_active_ = false;
+		manual_x_input_ = 0.0f;
+		manual_y_input_ = 0.0f;
+		manual_z_input_ = 0.0f;
 		hold_target_ = XYPoint{x_, y_};
+		target_altitude_ = altitude_;
+	}
+
+	bool setManualControl(float x_input, float y_input, float z_input)
+	{
+		std::lock_guard<std::mutex> lock(state_mutex_);
+		if (mode_ != MAVMode::GUIDED_ARMED) {
+			return false;
+		}
+
+		manual_control_active_ = true;
+		manual_x_input_ = std::clamp(x_input, -1.0f, 1.0f);
+		manual_y_input_ = std::clamp(y_input, -1.0f, 1.0f);
+		manual_z_input_ = std::clamp(z_input, -1.0f, 1.0f);
+		last_manual_control_time_ = std::chrono::steady_clock::now();
+		return true;
 	}
 
 	void setTargetAltitude(float altitude) override {
@@ -200,9 +232,38 @@ public:
 			dt = 0.01f;
 		}
 		last_update_time_ = now;
+		const bool manual_control_active = manual_control_active_
+			&& last_manual_control_time_.time_since_epoch().count() != 0
+			&& now - last_manual_control_time_ <= kManualControlTimeout;
+		if (!manual_control_active) {
+			manual_control_active_ = false;
+			manual_x_input_ = 0.0f;
+			manual_y_input_ = 0.0f;
+			manual_z_input_ = 0.0f;
+		}
 		
-		// If armed, climb towards target altitude.
-		if (mode_ == MAVMode::GUIDED_ARMED) {
+		if (mode_ == MAVMode::GUIDED_ARMED && manual_control_active) {
+			const float requested_vx = manual_x_input_ * max_velocity_mps_;
+			const float requested_vy = manual_y_input_ * max_velocity_mps_;
+			const float next_x = x_ + requested_vx * dt;
+			const float next_y = y_ + requested_vy * dt;
+			if (app_config::is_point_inside_polygon(XYPoint{next_x, next_y}, geofence_corners_)) {
+				x_ = next_x;
+				y_ = next_y;
+				vx_ = requested_vx;
+				vy_ = requested_vy;
+			} else {
+				vx_ = 0.0f;
+				vy_ = 0.0f;
+			}
+
+			const float requested_vz = -manual_z_input_ * climb_rate_mps_;
+			const float previous_altitude = altitude_;
+			altitude_ = std::min(altitude_ + requested_vz * dt, 0.0f);
+			vz_ = (altitude_ - previous_altitude) / dt;
+			hold_target_ = XYPoint{x_, y_};
+			target_altitude_ = altitude_;
+		} else if (mode_ == MAVMode::GUIDED_ARMED) {
 			const float alt_diff = target_altitude_ - altitude_;
 			const float max_step = climb_rate_mps_ * dt;
 			const float alt_step = std::clamp(alt_diff, -max_step, max_step);
@@ -228,7 +289,7 @@ public:
 		}
 		
 		// In guided mode, move toward the commanded XY target while altitude is tracked independently.
-		if (mode_ == MAVMode::GUIDED_ARMED) {
+		if (mode_ == MAVMode::GUIDED_ARMED && !manual_control_active) {
 			const float delta_x = hold_target_.x - x_;
 			const float delta_y = hold_target_.y - y_;
 			const float remaining_distance = std::hypot(delta_x, delta_y);
@@ -249,7 +310,7 @@ public:
 				vx_ = step_x / dt;
 				vy_ = step_y / dt;
 			}
-		} else {
+		} else if (mode_ != MAVMode::GUIDED_ARMED) {
 			// During climb, land, and disarmed states, hold XY position.
 			vx_ = 0.0f;
 			vy_ = 0.0f;
@@ -363,6 +424,21 @@ void handle_mavlink_command(const mavlink_message_t& msg, UdpSocket& socket, con
 
 		if (!g_telemetry->setGuidedHoldTarget(command.param5, command.param6, command.param7)) {
 			std::printf("\nDrone: rejected MAV_CMD_OVERRIDE_GOTO target outside geofence or while not armed\n");
+		}
+		break;
+	}
+	case MAVLINK_MSG_ID_MANUAL_CONTROL: {
+		mavlink_manual_control_t control{};
+		mavlink_msg_manual_control_decode(&msg, &control);
+		if (control.target != kDroneSystemId || !g_telemetry) {
+			break;
+		}
+
+		if (!g_telemetry->setManualControl(
+			std::clamp(static_cast<float>(control.x) / 1000.0f, -1.0f, 1.0f),
+			std::clamp(static_cast<float>(control.y) / 1000.0f, -1.0f, 1.0f),
+			std::clamp(static_cast<float>(control.z) / 1000.0f, -1.0f, 1.0f))) {
+			std::printf("\nDrone: ignored MANUAL_CONTROL while not in GUIDED_ARMED\n");
 		}
 		break;
 	}
