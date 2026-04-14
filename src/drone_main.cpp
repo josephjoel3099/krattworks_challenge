@@ -1,7 +1,7 @@
 #include <udp/simple_udp.h>
 
 #include <app_config.h>
-#include <common/mavlink.h>
+#include <ardupilotmega/mavlink.h>
 #include <drone_telemtry_abc.h>
 
 #include <algorithm>
@@ -27,6 +27,10 @@ namespace {
 constexpr float kAltitudeArrivalToleranceM = 0.5f;
 constexpr float kWaypointArrivalToleranceM = 0.75f;
 constexpr int kWaypointSamplingAttempts = 64;
+constexpr uint8_t kDroneSystemId = 1;
+constexpr uint8_t kDroneComponentId = MAV_COMP_ID_AUTOPILOT1;
+constexpr uint8_t kGcsSystemId = 255;
+constexpr uint8_t kGcsComponentId = MAV_COMP_ID_SYSTEM_CONTROL;
 
 std::array<XYPoint, 4> sort_geofence_corners(std::array<XYPoint, 4> corners)
 {
@@ -364,7 +368,35 @@ void signal_handler(int signum)
 	}
 }
 
-void handle_mavlink_command(const mavlink_message_t& msg)
+void send_mavlink_message(UdpSocket& socket, const IpAddress& gcs_addr, const mavlink_message_t& msg)
+{
+	uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
+	const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &msg);
+	socket.sendto(tx_buf, len, gcs_addr);
+}
+
+void send_geofence_point(UdpSocket& socket, const IpAddress& gcs_addr, uint8_t point_index)
+{
+	if (point_index >= g_drone_config.geofence_corners_m.size()) {
+		return;
+	}
+
+	const XYPoint& point = g_drone_config.geofence_corners_m[point_index];
+	mavlink_message_t fence_msg;
+	mavlink_msg_fence_point_pack(
+		kDroneSystemId,
+		kDroneComponentId,
+		&fence_msg,
+		kGcsSystemId,
+		kGcsComponentId,
+		point_index,
+		static_cast<uint8_t>(g_drone_config.geofence_corners_m.size()),
+		point.x,
+		point.y);
+	send_mavlink_message(socket, gcs_addr, fence_msg);
+}
+
+void handle_mavlink_command(const mavlink_message_t& msg, UdpSocket& socket, const IpAddress& gcs_addr)
 {
 	switch (msg.msgid) {
 	case MAVLINK_MSG_ID_SET_MODE: {
@@ -384,16 +416,19 @@ void handle_mavlink_command(const mavlink_message_t& msg)
 		}
 		break;
 	}
+	case MAVLINK_MSG_ID_FENCE_FETCH_POINT: {
+		mavlink_fence_fetch_point_t request{};
+		mavlink_msg_fence_fetch_point_decode(&msg, &request);
+		if (request.target_system != kDroneSystemId || request.target_component != kDroneComponentId) {
+			break;
+		}
+
+		send_geofence_point(socket, gcs_addr, request.idx);
+		break;
+	}
 	default:
 		break;
 	}
-}
-
-void send_mavlink_message(UdpSocket& socket, const IpAddress& gcs_addr, const mavlink_message_t& msg)
-{
-	uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
-	const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &msg);
-	socket.sendto(tx_buf, len, gcs_addr);
 }
 
 void simulation_worker()
@@ -423,9 +458,6 @@ void mavlink_worker(const IpAddress& gcs_addr, uint16_t drone_port)
 		drone_port,
 		gcs_addr.to_string().c_str());
 
-	constexpr uint8_t kSystemId = 1;
-	constexpr uint8_t kComponentId = MAV_COMP_ID_AUTOPILOT1;
-
 	using clock = std::chrono::steady_clock;
 	const auto start = clock::now();
 	auto next_hb = start;
@@ -453,7 +485,7 @@ void mavlink_worker(const IpAddress& gcs_addr, uint16_t drone_port)
 				for (int i = 0; i < bytes; ++i) {
 					mavlink_message_t msg;
 					if (mavlink_parse_char(MAVLINK_COMM_0, rx_buf[i], &msg, &parse_status)) {
-						handle_mavlink_command(msg);
+						handle_mavlink_command(msg, socket, gcs_addr);
 					}
 				}
 			}
@@ -464,8 +496,8 @@ void mavlink_worker(const IpAddress& gcs_addr, uint16_t drone_port)
 
 			mavlink_message_t hb_msg;
 			mavlink_msg_heartbeat_pack(
-				kSystemId,
-				kComponentId,
+				kDroneSystemId,
+				kDroneComponentId,
 				&hb_msg,
 				MAV_TYPE_QUADROTOR,
 				MAV_AUTOPILOT_GENERIC,
@@ -492,8 +524,8 @@ void mavlink_worker(const IpAddress& gcs_addr, uint16_t drone_port)
 
 			mavlink_message_t pos_msg;
 			mavlink_msg_local_position_ned_pack(
-				kSystemId,
-				kComponentId,
+				kDroneSystemId,
+				kDroneComponentId,
 				&pos_msg,
 				static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count()),
 				x,
