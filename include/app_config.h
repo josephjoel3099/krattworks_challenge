@@ -44,6 +44,61 @@ struct DroneConfig {
 
 namespace app_config {
 
+inline std::array<XYPoint, 4> sort_geofence_corners(std::array<XYPoint, 4> corners)
+{
+	float center_x = 0.0f;
+	float center_y = 0.0f;
+	for (const auto& corner : corners) {
+		center_x += corner.x;
+		center_y += corner.y;
+	}
+	center_x /= static_cast<float>(corners.size());
+	center_y /= static_cast<float>(corners.size());
+
+	std::sort(corners.begin(), corners.end(), [center_x, center_y](const XYPoint& lhs, const XYPoint& rhs) {
+		return std::atan2(lhs.y - center_y, lhs.x - center_x)
+			< std::atan2(rhs.y - center_y, rhs.x - center_x);
+	});
+
+	return corners;
+}
+
+inline XYPoint compute_polygon_centroid(const std::array<XYPoint, 4>& polygon)
+{
+	float center_x = 0.0f;
+	float center_y = 0.0f;
+	for (const auto& point : polygon) {
+		center_x += point.x;
+		center_y += point.y;
+	}
+
+	return XYPoint{
+		center_x / static_cast<float>(polygon.size()),
+		center_y / static_cast<float>(polygon.size()),
+	};
+}
+
+inline bool is_point_inside_polygon(const XYPoint& point, const std::array<XYPoint, 4>& polygon)
+{
+	bool inside = false;
+	for (size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++) {
+		const auto& current = polygon[i];
+		const auto& previous = polygon[j];
+		const bool crosses_scanline = (current.y > point.y) != (previous.y > point.y);
+		if (!crosses_scanline) {
+			continue;
+		}
+
+		const float edge_delta_y = previous.y - current.y;
+		const float interpolated_x = ((previous.x - current.x) * (point.y - current.y) / edge_delta_y) + current.x;
+		if (point.x <= interpolated_x) {
+			inside = !inside;
+		}
+	}
+
+	return inside;
+}
+
 inline std::optional<std::filesystem::path> find_config_path(const std::string& file_name)
 {
 	std::filesystem::path config_path;
@@ -143,19 +198,7 @@ inline std::optional<std::array<XYPoint, 4>> get_json_xy_points(
 
 inline float polygon_area(std::array<XYPoint, 4> points)
 {
-	float center_x = 0.0f;
-	float center_y = 0.0f;
-	for (const auto& point : points) {
-		center_x += point.x;
-		center_y += point.y;
-	}
-	center_x /= static_cast<float>(points.size());
-	center_y /= static_cast<float>(points.size());
-
-	std::sort(points.begin(), points.end(), [center_x, center_y](const XYPoint& lhs, const XYPoint& rhs) {
-		return std::atan2(lhs.y - center_y, lhs.x - center_x)
-			< std::atan2(rhs.y - center_y, rhs.x - center_x);
-	});
+	points = sort_geofence_corners(points);
 
 	float twice_area = 0.0f;
 	for (size_t i = 0; i < points.size(); ++i) {
