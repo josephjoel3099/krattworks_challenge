@@ -16,10 +16,36 @@ namespace detail {
 
 constexpr ImVec2 kMinPlotSize{320.0f, 320.0f};
 
-inline float compute_plot_extent(const std::deque<ImVec2>& history, float current_x, float current_y)
+inline size_t geofence_vertex_target_count(const GeofenceSnapshot& geofence)
 {
-	float max_abs = std::max(std::abs(current_x), std::abs(current_y));
-	for (const ImVec2& point : history) {
+	if (geofence.expected_count == 0) {
+		return geofence.received_count == 0 ? 0 : geofence.vertices.size();
+	}
+
+	return std::min<size_t>(geofence.expected_count, geofence.vertices.size());
+}
+
+inline bool has_complete_geofence(const GeofenceSnapshot& geofence)
+{
+	const size_t target_count = geofence_vertex_target_count(geofence);
+	return target_count >= 3 && geofence.received_count >= target_count;
+}
+
+inline float compute_plot_extent(const TelemetrySnapshot& telemetry)
+{
+	float max_abs = std::max(std::abs(telemetry.x), std::abs(telemetry.y));
+	for (const ImVec2& point : telemetry.position_history) {
+		max_abs = std::max(max_abs, std::abs(point.x));
+		max_abs = std::max(max_abs, std::abs(point.y));
+	}
+
+	const size_t fence_points = geofence_vertex_target_count(telemetry.geofence);
+	for (size_t index = 0; index < fence_points; ++index) {
+		if (!telemetry.geofence.received[index]) {
+			continue;
+		}
+
+		const ImVec2& point = telemetry.geofence.vertices[index];
 		max_abs = std::max(max_abs, std::abs(point.x));
 		max_abs = std::max(max_abs, std::abs(point.y));
 	}
@@ -43,6 +69,33 @@ inline bool has_recent_data(const TelemetrySnapshot& telemetry)
 		&& std::chrono::duration_cast<std::chrono::milliseconds>(now - telemetry.last_message_time).count() < 1500;
 }
 
+inline void draw_geofence_overlay(const TelemetrySnapshot& telemetry, const ImVec2& canvas_pos, const ImVec2& canvas_size, float extent)
+{
+	if (!has_complete_geofence(telemetry.geofence)) {
+		return;
+	}
+
+	std::vector<ImVec2> points;
+	points.reserve(telemetry.geofence.vertices.size());
+	for (size_t index = 0; index < geofence_vertex_target_count(telemetry.geofence); ++index) {
+		const ImVec2& point = telemetry.geofence.vertices[index];
+		points.push_back(world_to_canvas(point.x, point.y, canvas_pos, canvas_size, extent));
+	}
+
+	if (points.size() < 3) {
+		return;
+	}
+
+	ImDrawList* draw_list = ImGui::GetWindowDrawList();
+	draw_list->AddConvexPolyFilled(points.data(), static_cast<int>(points.size()), IM_COL32(255, 120, 90, 24));
+	for (size_t index = 0; index < points.size(); ++index) {
+		const ImVec2& current = points[index];
+		const ImVec2& next = points[(index + 1) % points.size()];
+		draw_list->AddLine(current, next, IM_COL32(255, 120, 90, 255), 2.0f);
+		draw_list->AddCircleFilled(current, 4.0f, IM_COL32(255, 160, 120, 255));
+	}
+}
+
 inline void draw_position_plot(const TelemetrySnapshot& telemetry)
 {
 	ImGui::TextUnformatted("2D Position (X/Y)");
@@ -57,7 +110,7 @@ inline void draw_position_plot(const TelemetrySnapshot& telemetry)
 	draw_list->AddRectFilled(canvas_pos, canvas_end, IM_COL32(15, 18, 24, 255), 8.0f);
 	draw_list->AddRect(canvas_pos, canvas_end, IM_COL32(82, 96, 122, 255), 8.0f, 0, 1.5f);
 
-	const float extent = compute_plot_extent(telemetry.position_history, telemetry.x, telemetry.y);
+	const float extent = compute_plot_extent(telemetry);
 	const ImU32 grid_color = IM_COL32(65, 76, 96, 255);
 	const ImU32 axis_color = IM_COL32(124, 170, 255, 255);
 	const ImU32 path_color = IM_COL32(110, 220, 170, 255);
@@ -74,6 +127,8 @@ inline void draw_position_plot(const TelemetrySnapshot& telemetry)
 	const ImVec2 origin = world_to_canvas(0.0f, 0.0f, canvas_pos, canvas_size, extent);
 	draw_list->AddLine(ImVec2(canvas_pos.x, origin.y), ImVec2(canvas_end.x, origin.y), axis_color, 1.5f);
 	draw_list->AddLine(ImVec2(origin.x, canvas_pos.y), ImVec2(origin.x, canvas_end.y), axis_color, 1.5f);
+
+	draw_geofence_overlay(telemetry, canvas_pos, canvas_size, extent);
 
 	if (telemetry.position_history.size() > 1) {
 		std::vector<ImVec2> points;
@@ -134,6 +189,10 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 	ImGui::Columns(2, "telemetry_columns", false);
 	ImGui::Text("Heartbeat received: %s", state.telemetry.has_heartbeat ? "yes" : "no");
 	ImGui::Text("Position received: %s", state.telemetry.has_position ? "yes" : "no");
+	ImGui::Text(
+		"Geofence received: %u / %zu",
+		state.telemetry.geofence.received_count,
+		detail::geofence_vertex_target_count(state.telemetry.geofence));
 	ImGui::Text("System/Component: %u / %u", state.telemetry.system_id, state.telemetry.component_id);
 	ImGui::Text("Vehicle type: %u", state.telemetry.vehicle_type);
 	ImGui::Text("Base mode: 0x%02X", state.telemetry.base_mode);
@@ -148,6 +207,14 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 	ImGui::Text("VX: %.2f m/s", state.telemetry.vx);
 	ImGui::Text("VY: %.2f m/s", state.telemetry.vy);
 	ImGui::Text("VZ: %.2f m/s", state.telemetry.vz);
+	if (detail::has_complete_geofence(state.telemetry.geofence)) {
+		for (size_t index = 0; index < detail::geofence_vertex_target_count(state.telemetry.geofence); ++index) {
+			const ImVec2& point = state.telemetry.geofence.vertices[index];
+			ImGui::Text("Fence %zu: X %.2f  Y %.2f", index + 1, point.x, point.y);
+		}
+	} else {
+		ImGui::TextUnformatted("Fence points are being fetched from the drone.");
+	}
 	ImGui::Columns(1);
 	ImGui::Separator();
 

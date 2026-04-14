@@ -3,12 +3,21 @@
 
 #include <imgui.h>
 
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
 
 namespace gcs_ui {
+
+struct GeofenceSnapshot {
+	std::array<ImVec2, 4> vertices{};
+	std::array<bool, 4> received{};
+	uint8_t expected_count = 0;
+	uint8_t received_count = 0;
+};
 
 struct TelemetrySnapshot {
 	uint8_t system_id = 0;
@@ -28,6 +37,7 @@ struct TelemetrySnapshot {
 	bool has_position = false;
 	std::chrono::steady_clock::time_point last_message_time{};
 	std::deque<ImVec2> position_history;
+	GeofenceSnapshot geofence;
 };
 
 struct DashboardState {
