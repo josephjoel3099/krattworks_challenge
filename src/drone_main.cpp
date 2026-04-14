@@ -1,5 +1,6 @@
 #include <udp/simple_udp.h>
 
+#include <app_config.h>
 #include <common/mavlink.h>
 #include <drone_telemtry_abc.h>
 
@@ -10,10 +11,14 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
-#include <thread>
 #include <mutex>
+#include <memory>
+#include <thread>
 
 std::atomic_bool g_running{true};
+
+SharedConfig g_shared_config;
+DroneConfig g_drone_config;
 
 // Concrete implementation of DroneTelemetryABC
 class DroneTelemetrySimulator : public DroneTelemetryABC {
@@ -26,12 +31,26 @@ private:
 	float vx_ = 0.0f;
 	float vy_ = 0.0f;
 	float vz_ = 0.0f;
+	float max_velocity_mps_;
+	float climb_rate_mps_;
+	float land_rate_mps_;
+	float arm_target_altitude_m_;
 	MAVMode mode_ = MAVMode::GUIDED_DISARMED;
 	std::chrono::steady_clock::time_point start_time_;
+	std::chrono::steady_clock::time_point last_update_time_;
 
 public:
-	DroneTelemetrySimulator() {
+	explicit DroneTelemetrySimulator(
+		float max_velocity_mps,
+		float climb_rate_mps,
+		float land_rate_mps,
+		float arm_target_altitude_m)
+		: max_velocity_mps_(max_velocity_mps),
+		  climb_rate_mps_(climb_rate_mps),
+		  land_rate_mps_(land_rate_mps),
+		  arm_target_altitude_m_(arm_target_altitude_m) {
 		start_time_ = std::chrono::steady_clock::now();
+		last_update_time_ = start_time_;
 	}
 
 	float getX() const override {
@@ -57,9 +76,9 @@ public:
 	void setMode(MAVMode mode) override {
 		std::lock_guard<std::mutex> lock(state_mutex_);
 		if (mode == MAVMode::GUIDED_ARMED && mode_ != MAVMode::GUIDED_ARMED) {
-			// Transitioning to ARMED - set target altitude to 20m
-			target_altitude_ = -20.0f;  // NED convention: negative Z is up
-			std::printf("\nDrone: ARMED - climbing to 20m altitude\n");
+			// NED convention: negative Z is up.
+			target_altitude_ = -arm_target_altitude_m_;
+			std::printf("\nDrone: ARMED - climbing to %.1fm altitude\n", arm_target_altitude_m_);
 		} else if (mode == MAVMode::LAND && mode_ != MAVMode::GUIDED_DISARMED) {
 			target_altitude_ = 0.0f;
 			std::printf("\nDrone: LAND mode engaged\n");
@@ -123,19 +142,25 @@ public:
 		std::lock_guard<std::mutex> lock(state_mutex_);
 		
 		const auto now = std::chrono::steady_clock::now();
+		float dt = std::chrono::duration<float>(now - last_update_time_).count();
+		if (dt <= 0.0f) {
+			dt = 0.01f;
+		}
+		last_update_time_ = now;
 		const float t = std::chrono::duration<float>(now - start_time_).count();
 		
 		// If armed, climb towards target altitude.
 		if (mode_ == MAVMode::GUIDED_ARMED) {
 			const float alt_diff = target_altitude_ - altitude_;
-			const float alt_step = std::clamp(alt_diff, -CLIMB_RATE * 0.01f, CLIMB_RATE * 0.01f);
+			const float max_step = climb_rate_mps_ * dt;
+			const float alt_step = std::clamp(alt_diff, -max_step, max_step);
 			altitude_ += alt_step;
-			vz_ = alt_step * 100.0f;  // Convert to velocity for display
+			vz_ = alt_step / dt;
 		} else if (mode_ == MAVMode::LAND) {
 			const float alt_diff = 0.0f - altitude_;
-			const float alt_step = std::clamp(alt_diff, 0.0f, LAND_RATE * 0.01f);
+			const float alt_step = std::clamp(alt_diff, 0.0f, land_rate_mps_ * dt);
 			altitude_ += alt_step;
-			vz_ = alt_step * 100.0f;
+			vz_ = alt_step / dt;
 
 			if (altitude_ >= -0.5f) {
 				altitude_ = 0.0f;
@@ -152,10 +177,10 @@ public:
 		
 		// Simulate circular movement pattern only when armed.
 		if (mode_ == MAVMode::GUIDED_ARMED) {
-			x_ = std::sin(t) * 10.0f;
-			y_ = std::cos(t) * 10.0f;
-			vx_ = std::cos(t) * 10.0f;
-			vy_ = -std::sin(t) * 10.0f;
+			x_ = std::sin(t) * max_velocity_mps_;
+			y_ = std::cos(t) * max_velocity_mps_;
+			vx_ = std::cos(t) * max_velocity_mps_;
+			vy_ = -std::sin(t) * max_velocity_mps_;
 		} else {
 			// During land/disarmed, hold position and do not translate.
 			vx_ = 0.0f;
@@ -179,7 +204,7 @@ public:
 	}
 };
 
-DroneTelemetrySimulator g_telemetry;
+std::unique_ptr<DroneTelemetrySimulator> g_telemetry;
 
 void signal_handler(int signum)
 {
@@ -200,11 +225,11 @@ void handle_mavlink_command(const mavlink_message_t& msg)
 			cmd.custom_mode);
 		
 		if (cmd.custom_mode == static_cast<uint32_t>(MAVMode::LAND)) {
-			g_telemetry.setMode(MAVMode::LAND);
+			if (g_telemetry) g_telemetry->setMode(MAVMode::LAND);
 		} else if ((cmd.base_mode & MAV_MODE_FLAG_GUIDED_ENABLED) && (cmd.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)) {
-			g_telemetry.setMode(MAVMode::GUIDED_ARMED);
+			if (g_telemetry) g_telemetry->setMode(MAVMode::GUIDED_ARMED);
 		} else if ((cmd.base_mode & MAV_MODE_FLAG_GUIDED_ENABLED) && !(cmd.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)) {
-			g_telemetry.setMode(MAVMode::GUIDED_DISARMED);
+			if (g_telemetry) g_telemetry->setMode(MAVMode::GUIDED_DISARMED);
 		}
 		break;
 	}
@@ -222,9 +247,14 @@ void send_mavlink_message(UdpSocket& socket, const IpAddress& gcs_addr, const ma
 
 void simulation_worker()
 {
+	const double update_rate_hz = std::max(1.0, static_cast<double>(g_drone_config.update_rate_hz));
+	const auto update_interval = std::chrono::duration<double>(1.0 / update_rate_hz);
+
 	while (g_running) {
-		g_telemetry.update();
-		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		if (g_telemetry) {
+			g_telemetry->update();
+		}
+		std::this_thread::sleep_for(update_interval);
 	}
 }
 
@@ -236,7 +266,11 @@ void mavlink_worker(const IpAddress& gcs_addr, uint16_t drone_port)
 		return;
 	}
 
-	std::printf("Drone: sending telemetry from 127.0.0.1:%u to %s\n", drone_port, gcs_addr.to_string().c_str());
+	std::printf(
+		"Drone: sending telemetry from %s:%u to %s\n",
+		g_shared_config.host.c_str(),
+		drone_port,
+		gcs_addr.to_string().c_str());
 
 	constexpr uint8_t kSystemId = 1;
 	constexpr uint8_t kComponentId = MAV_COMP_ID_AUTOPILOT1;
@@ -245,6 +279,10 @@ void mavlink_worker(const IpAddress& gcs_addr, uint16_t drone_port)
 	const auto start = clock::now();
 	auto next_hb = start;
 	auto next_pos = start;
+	const auto hb_interval = std::chrono::duration<double>(
+		1.0 / std::max(0.1, static_cast<double>(g_drone_config.heartbeat_rate_hz)));
+	const auto pos_interval = std::chrono::duration<double>(
+		1.0 / std::max(0.1, static_cast<double>(g_drone_config.position_rate_hz)));
 
 	uint8_t rx_buf[2048];
 	mavlink_status_t parse_status{};
@@ -253,7 +291,7 @@ void mavlink_worker(const IpAddress& gcs_addr, uint16_t drone_port)
 		const auto now = clock::now();
 
 		// Handle incoming commands
-		if (socket.poll_read(5)) {
+		if (socket.poll_read(std::max(1, g_drone_config.rx_poll_timeout_ms))) {
 			while (socket.available() > 0) {
 				IpAddress from;
 				const int bytes = socket.recvfrom(rx_buf, sizeof(rx_buf), from);
@@ -270,8 +308,8 @@ void mavlink_worker(const IpAddress& gcs_addr, uint16_t drone_port)
 			}
 		}
 
-		if (now >= next_hb) {
-			g_telemetry.sendHeartbeat();
+		if (now >= next_hb && g_telemetry) {
+			g_telemetry->sendHeartbeat();
 
 			mavlink_message_t hb_msg;
 			mavlink_msg_heartbeat_pack(
@@ -280,26 +318,26 @@ void mavlink_worker(const IpAddress& gcs_addr, uint16_t drone_port)
 				&hb_msg,
 				MAV_TYPE_QUADROTOR,
 				MAV_AUTOPILOT_GENERIC,
-				g_telemetry.getMode() == MAVMode::GUIDED_DISARMED ? MAV_MODE_GUIDED_DISARMED : MAV_MODE_GUIDED_ARMED,
-				static_cast<uint32_t>(g_telemetry.getMode()),
+				g_telemetry->getMode() == MAVMode::GUIDED_DISARMED ? MAV_MODE_GUIDED_DISARMED : MAV_MODE_GUIDED_ARMED,
+				static_cast<uint32_t>(g_telemetry->getMode()),
 				MAV_STATE_ACTIVE);
 
 			uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
 			const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &hb_msg);
 			socket.sendto(tx_buf, len, gcs_addr);
 
-			next_hb += std::chrono::seconds(1);
+			next_hb += std::chrono::duration_cast<clock::duration>(hb_interval);
 		}
 
-		if (now >= next_pos) {
-			g_telemetry.sendLocalPositionNED();
+		if (now >= next_pos && g_telemetry) {
+			g_telemetry->sendLocalPositionNED();
 
-			const float x = g_telemetry.getX();
-			const float y = g_telemetry.getY();
-			const float z = g_telemetry.getAltitude();
-			const float vx = g_telemetry.getVx();
-			const float vy = g_telemetry.getVy();
-			const float vz = g_telemetry.getVz();
+			const float x = g_telemetry->getX();
+			const float y = g_telemetry->getY();
+			const float z = g_telemetry->getAltitude();
+			const float vx = g_telemetry->getVx();
+			const float vy = g_telemetry->getVy();
+			const float vz = g_telemetry->getVz();
 
 			mavlink_message_t pos_msg;
 			mavlink_msg_local_position_ned_pack(
@@ -318,7 +356,7 @@ void mavlink_worker(const IpAddress& gcs_addr, uint16_t drone_port)
 			const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &pos_msg);
 			socket.sendto(tx_buf, len, gcs_addr);
 
-			next_pos += std::chrono::milliseconds(100);
+			next_pos += std::chrono::duration_cast<clock::duration>(pos_interval);
 		}
 
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -332,16 +370,48 @@ int main()
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
 
-	constexpr uint16_t kDroneLocalPort = 14551;
-	constexpr uint16_t kGcsPort = 14550;
+	// Provisioning
+	g_shared_config = app_config::load_shared_config();
+	g_drone_config = app_config::load_drone_config();
 
-	const IpAddress gcs_addr{"127.0.0.1", kGcsPort};
+	if (!app_config::find_config_path("shared_config.json").has_value() || !app_config::is_valid(g_shared_config)) {
+		std::fprintf(stderr, "Drone: shared_config.json is missing or invalid\n");
+		return 1;
+	}
+
+	if (!app_config::find_config_path("drone_config.json").has_value() || !app_config::is_valid(g_drone_config)) {
+		std::fprintf(stderr, "Drone: drone_config.json is missing or invalid\n");
+		return 1;
+	}
+
+	if (const auto cfg_path = app_config::find_config_path("drone_config.json"); cfg_path.has_value()) {
+		std::printf(
+			"Drone: loaded config from %s (climb_rate_mps=%.2f, land_rate_mps=%.2f, arm_target_altitude_m=%.2f)\n",
+			cfg_path->string().c_str(),
+			g_drone_config.climb_rate_mps,
+			g_drone_config.land_rate_mps,
+			g_drone_config.arm_target_altitude_m);
+	} else {
+		std::printf(
+			"Drone: drone_config.json not found; using defaults (climb_rate_mps=%.2f, land_rate_mps=%.2f, arm_target_altitude_m=%.2f)\n",
+			g_drone_config.climb_rate_mps,
+			g_drone_config.land_rate_mps,
+			g_drone_config.arm_target_altitude_m);
+	}
+
+	g_telemetry = std::make_unique<DroneTelemetrySimulator>(
+		g_drone_config.max_velocity_mps,
+		g_drone_config.climb_rate_mps,
+		g_drone_config.land_rate_mps,
+		g_drone_config.arm_target_altitude_m);
+
+	const IpAddress gcs_addr{g_shared_config.host.c_str(), g_drone_config.gcs_port};
 
 	// Start simulation thread
 	std::thread sim_thread(simulation_worker);
 
 	// Start MAVLink communication thread
-	std::thread mavlink_thread(mavlink_worker, gcs_addr, kDroneLocalPort);
+	std::thread mavlink_thread(mavlink_worker, gcs_addr, g_drone_config.drone_port);
 
 	// Wait for threads to complete
 	sim_thread.join();
