@@ -1,7 +1,9 @@
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +23,11 @@ struct GcsConfig {
 	int poll_timeout_ms = 0;
 };
 
+struct XYPoint {
+	float x = 0.0f;
+	float y = 0.0f;
+};
+
 struct DroneConfig {
 	uint16_t drone_port = 0;
 	uint16_t gcs_port = 0;
@@ -32,6 +39,7 @@ struct DroneConfig {
 	float land_rate_mps = 0.0f;
 	float arm_target_altitude_m = 0.0f;
 	int rx_poll_timeout_ms = 0;
+	std::array<XYPoint, 4> geofence_corners_m{};
 };
 
 namespace app_config {
@@ -93,6 +101,72 @@ inline std::optional<std::string> get_json_string(const std::string& json, const
 	return match[1].str();
 }
 
+inline std::optional<std::array<XYPoint, 4>> get_json_xy_points(
+	const std::string& json,
+	const std::string& key)
+{
+	const std::regex array_pattern("\"" + key + "\"\\s*:\\s*\\[([\\s\\S]*?)\\]");
+	std::smatch array_match;
+	if (!std::regex_search(json, array_match, array_pattern)) {
+		return std::nullopt;
+	}
+
+	const std::string points_json = array_match[1].str();
+	const std::regex point_pattern(
+		"\\{\\s*\"x\"\\s*:\\s*(-?[0-9]+(?:\\.[0-9]+)?)\\s*,\\s*\"y\"\\s*:\\s*(-?[0-9]+(?:\\.[0-9]+)?)\\s*\\}");
+
+	std::array<XYPoint, 4> points{};
+	size_t index = 0;
+	for (std::sregex_iterator it(points_json.begin(), points_json.end(), point_pattern), end;
+		 it != end;
+		 ++it) {
+		if (index >= points.size()) {
+			return std::nullopt;
+		}
+
+		try {
+			points[index++] = XYPoint{
+				static_cast<float>(std::stof((*it)[1].str())),
+				static_cast<float>(std::stof((*it)[2].str())),
+			};
+		} catch (...) {
+			return std::nullopt;
+		}
+	}
+
+	if (index != points.size()) {
+		return std::nullopt;
+	}
+
+	return points;
+}
+
+inline float polygon_area(std::array<XYPoint, 4> points)
+{
+	float center_x = 0.0f;
+	float center_y = 0.0f;
+	for (const auto& point : points) {
+		center_x += point.x;
+		center_y += point.y;
+	}
+	center_x /= static_cast<float>(points.size());
+	center_y /= static_cast<float>(points.size());
+
+	std::sort(points.begin(), points.end(), [center_x, center_y](const XYPoint& lhs, const XYPoint& rhs) {
+		return std::atan2(lhs.y - center_y, lhs.x - center_x)
+			< std::atan2(rhs.y - center_y, rhs.x - center_x);
+	});
+
+	float twice_area = 0.0f;
+	for (size_t i = 0; i < points.size(); ++i) {
+		const auto& current = points[i];
+		const auto& next = points[(i + 1) % points.size()];
+		twice_area += (current.x * next.y) - (next.x * current.y);
+	}
+
+	return std::abs(twice_area) * 0.5f;
+}
+
 template <typename T>
 inline void set_if_present_from_json_number(const std::string& json, const std::string& key, T& out_value)
 {
@@ -150,6 +224,9 @@ inline DroneConfig load_drone_config()
 	set_if_present_from_json_number(*json, "land_rate_mps", cfg.land_rate_mps);
 	set_if_present_from_json_number(*json, "arm_target_altitude_m", cfg.arm_target_altitude_m);
 	set_if_present_from_json_number(*json, "rx_poll_timeout_ms", cfg.rx_poll_timeout_ms);
+	if (const auto geofence_corners = get_json_xy_points(*json, "geofence_corners_m"); geofence_corners.has_value()) {
+		cfg.geofence_corners_m = *geofence_corners;
+	}
 	return cfg;
 }
 
@@ -174,7 +251,8 @@ inline bool is_valid(const DroneConfig& cfg)
 		&& cfg.climb_rate_mps > 0.0f
 		&& cfg.land_rate_mps > 0.0f
 		&& cfg.arm_target_altitude_m > 0.0f
-		&& cfg.rx_poll_timeout_ms > 0;
+		&& cfg.rx_poll_timeout_ms > 0
+		&& polygon_area(cfg.geofence_corners_m) > 0.01f;
 }
 
 } // namespace app_config

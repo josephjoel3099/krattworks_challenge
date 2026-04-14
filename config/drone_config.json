@@ -8,5 +8,11 @@
 	"climb_rate_mps": 5.0,
 	"land_rate_mps": 5.0,
 	"arm_target_altitude_m": 20.0,
-	"rx_poll_timeout_ms": 5
+	"rx_poll_timeout_ms": 5,
+	"geofence_corners_m": [
+		{ "x": -25.0, "y": -25.0 },
+		{ "x": 25.0, "y": -25.0 },
+		{ "x": 25.0, "y": 25.0 },
+		{ "x": -25.0, "y": 25.0 }
+	]
 }
