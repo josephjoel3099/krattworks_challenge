@@ -1,9 +1,10 @@
 #include <udp/simple_udp.h>
 
 #include <app_config.h>
-#include <common/mavlink.h>
+#include <ardupilotmega/mavlink.h>
 #include <gcs_gui_host.h>
 
+#include <array>
 #include <atomic>
 #include <csignal>
 #include <chrono>
@@ -38,6 +39,11 @@ std::mutex g_command_mutex;
 std::deque<RequestedMode> g_pending_commands;
 
 constexpr size_t kMaxHistoryPoints = 512;
+constexpr uint8_t kGcsSystemId = 255;
+constexpr uint8_t kGcsComponentId = MAV_COMP_ID_SYSTEM_CONTROL;
+constexpr uint8_t kDroneSystemId = 1;
+constexpr uint8_t kDroneComponentId = MAV_COMP_ID_AUTOPILOT1;
+constexpr auto kGeofenceFetchInterval = std::chrono::milliseconds(250);
 
 void signal_handler(int signum)
 {
@@ -114,6 +120,27 @@ void update_local_position(const mavlink_message_t& msg)
 	}
 }
 
+void update_geofence_point(const mavlink_message_t& msg)
+{
+	mavlink_fence_point_t fence_point{};
+	mavlink_msg_fence_point_decode(&msg, &fence_point);
+
+	if (fence_point.idx >= g_telemetry.geofence.vertices.size()) {
+		return;
+	}
+
+	std::lock_guard<std::mutex> lock(g_telemetry_mutex);
+	g_telemetry.geofence.expected_count = std::min<uint8_t>(
+		fence_point.count,
+		static_cast<uint8_t>(g_telemetry.geofence.vertices.size()));
+	if (!g_telemetry.geofence.received[fence_point.idx]) {
+		g_telemetry.geofence.received[fence_point.idx] = true;
+		++g_telemetry.geofence.received_count;
+	}
+	g_telemetry.geofence.vertices[fence_point.idx] = ImVec2(fence_point.lat, fence_point.lng);
+	g_telemetry.last_message_time = std::chrono::steady_clock::now();
+}
+
 void handle_mavlink_message(const mavlink_message_t& msg)
 {
 	switch (msg.msgid) {
@@ -123,18 +150,32 @@ void handle_mavlink_message(const mavlink_message_t& msg)
 	case MAVLINK_MSG_ID_LOCAL_POSITION_NED:
 		update_local_position(msg);
 		break;
+	case MAVLINK_MSG_ID_FENCE_POINT:
+		update_geofence_point(msg);
+		break;
 	default:
 		break;
 	}
 }
 
+bool next_missing_geofence_index(uint8_t& index)
+{
+	std::lock_guard<std::mutex> lock(g_telemetry_mutex);
+	const size_t target_count = g_telemetry.geofence.expected_count == 0
+		? g_telemetry.geofence.vertices.size()
+		: std::min<size_t>(g_telemetry.geofence.expected_count, g_telemetry.geofence.vertices.size());
+	for (size_t point_index = 0; point_index < target_count; ++point_index) {
+		if (!g_telemetry.geofence.received[point_index]) {
+			index = static_cast<uint8_t>(point_index);
+			return true;
+		}
+	}
+
+	return false;
+}
+
 void send_set_mode_command(UdpSocket& socket, RequestedMode mode)
 {
-
-	constexpr uint8_t kGcsSystemId = 255;
-	constexpr uint8_t kGcsComponentId = MAV_COMP_ID_SYSTEM_CONTROL;
-	constexpr uint8_t kDroneSystemId = 1;
-
 	mavlink_message_t msg;
 	uint8_t base_mode = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED | MAV_MODE_FLAG_GUIDED_ENABLED;
 	if (mode != RequestedMode::GuidedDisarmed) {
@@ -156,6 +197,39 @@ void send_set_mode_command(UdpSocket& socket, RequestedMode mode)
 	std::printf("GCS: Sent SET_MODE command - %s\n", mode_label(mode));
 }
 
+void send_geofence_fetch_request(UdpSocket& socket, uint8_t point_index)
+{
+	mavlink_message_t msg;
+	mavlink_msg_fence_fetch_point_pack(
+		kGcsSystemId,
+		kGcsComponentId,
+		&msg,
+		kDroneSystemId,
+		kDroneComponentId,
+		point_index);
+
+	uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
+	const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &msg);
+	socket.sendto(tx_buf, len, g_drone_addr);
+}
+
+void request_geofence_if_needed(UdpSocket& socket)
+{
+	static auto last_request_time = std::chrono::steady_clock::time_point{};
+	const auto now = std::chrono::steady_clock::now();
+	if (last_request_time.time_since_epoch().count() != 0 && now - last_request_time < kGeofenceFetchInterval) {
+		return;
+	}
+
+	uint8_t point_index = 0;
+	if (!next_missing_geofence_index(point_index)) {
+		return;
+	}
+
+	send_geofence_fetch_request(socket, point_index);
+	last_request_time = now;
+}
+
 void mavlink_worker()
 {
 	UdpSocket server;
@@ -175,6 +249,8 @@ void mavlink_worker()
 		while (pop_mode_command(requested_mode)) {
 			send_set_mode_command(server, requested_mode);
 		}
+
+		request_geofence_if_needed(server);
 
 		if (!server.poll_read(g_gcs_config.poll_timeout_ms)) {
 			continue;
