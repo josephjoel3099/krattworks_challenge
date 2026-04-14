@@ -35,13 +35,6 @@ public:
     // Movement control
     virtual void setTargetAltitude(float altitude) = 0;
     virtual float getTargetAltitude() const = 0;
-
-protected:
-    static constexpr float VELOCITY = 5.0f;  // m/s
-    static constexpr float TELEMETRY_RATE = 10.0f;  // Hz
-    static constexpr float TELEMETRY_INTERVAL = 1.0f / TELEMETRY_RATE;  // seconds
-    static constexpr float CLIMB_RATE = 2.0f;  // m/s - rate to climb to target altitude
-    static constexpr float LAND_RATE = 1.0f;  // m/s - rate to descend during landing
 };
 
 #endif // DRONE_TELEMETRY_ABC_H
