@@ -17,6 +17,7 @@ namespace gcs_ui {
 namespace detail {
 
 constexpr ImVec2 kMinPlotSize{320.0f, 320.0f};
+constexpr ImVec2 kMinAltitudePlotSize{320.0f, 220.0f};
 
 inline size_t geofence_vertex_target_count(const GeofenceSnapshot& geofence)
 {
@@ -54,10 +55,6 @@ inline bool is_point_inside_geofence(const GeofenceSnapshot& geofence, float x, 
 inline float compute_plot_extent(const TelemetrySnapshot& telemetry)
 {
 	float max_abs = std::max(std::abs(telemetry.x), std::abs(telemetry.y));
-	for (const ImVec2& point : telemetry.position_history) {
-		max_abs = std::max(max_abs, std::abs(point.x));
-		max_abs = std::max(max_abs, std::abs(point.y));
-	}
 
 	const size_t fence_points = geofence_vertex_target_count(telemetry.geofence);
 	for (size_t index = 0; index < fence_points; ++index) {
@@ -77,6 +74,25 @@ inline ImVec2 world_to_canvas(float x, float y, const ImVec2& origin, const ImVe
 {
 	const float normalized_x = (x + extent) / (2.0f * extent);
 	const float normalized_y = (y + extent) / (2.0f * extent);
+	return ImVec2(
+		origin.x + normalized_x * size.x,
+		origin.y + (1.0f - normalized_y) * size.y);
+}
+
+inline ImVec2 altitude_to_canvas(
+	float time_s,
+	float altitude_m,
+	const ImVec2& origin,
+	const ImVec2& size,
+	float min_time_s,
+	float max_time_s,
+	float min_altitude_m,
+	float max_altitude_m)
+{
+	const float time_span = std::max(max_time_s - min_time_s, 1.0f);
+	const float altitude_span = std::max(max_altitude_m - min_altitude_m, 1.0f);
+	const float normalized_x = (time_s - min_time_s) / time_span;
+	const float normalized_y = (altitude_m - min_altitude_m) / altitude_span;
 	return ImVec2(
 		origin.x + normalized_x * size.x,
 		origin.y + (1.0f - normalized_y) * size.y);
@@ -133,7 +149,6 @@ inline void draw_position_plot(const TelemetrySnapshot& telemetry)
 	const float extent = compute_plot_extent(telemetry);
 	const ImU32 grid_color = IM_COL32(65, 76, 96, 255);
 	const ImU32 axis_color = IM_COL32(124, 170, 255, 255);
-	const ImU32 path_color = IM_COL32(110, 220, 170, 255);
 	const ImU32 point_color = IM_COL32(255, 200, 90, 255);
 
 	for (int step = 1; step < 4; ++step) {
@@ -150,15 +165,6 @@ inline void draw_position_plot(const TelemetrySnapshot& telemetry)
 
 	draw_geofence_overlay(telemetry, canvas_pos, canvas_size, extent);
 
-	if (telemetry.position_history.size() > 1) {
-		std::vector<ImVec2> points;
-		points.reserve(telemetry.position_history.size());
-		for (const ImVec2& point : telemetry.position_history) {
-			points.push_back(world_to_canvas(point.x, point.y, canvas_pos, canvas_size, extent));
-		}
-		draw_list->AddPolyline(points.data(), static_cast<int>(points.size()), path_color, 0, 2.0f);
-	}
-
 	if (telemetry.has_position) {
 		const ImVec2 drone_pos = world_to_canvas(telemetry.x, telemetry.y, canvas_pos, canvas_size, extent);
 		draw_list->AddCircleFilled(drone_pos, 5.0f, point_color);
@@ -170,6 +176,115 @@ inline void draw_position_plot(const TelemetrySnapshot& telemetry)
 	draw_list->AddText(ImVec2(canvas_pos.x + 12.0f, canvas_pos.y + 10.0f), IM_COL32_WHITE, label);
 
 	ImGui::InvisibleButton("position_plot", canvas_size);
+}
+
+inline void draw_altitude_plot(const TelemetrySnapshot& telemetry)
+{
+	ImGui::Spacing();
+	ImGui::TextUnformatted("Altitude Over Time");
+	ImVec2 canvas_size = ImGui::GetContentRegionAvail();
+	canvas_size.x = std::max(canvas_size.x, kMinAltitudePlotSize.x);
+	canvas_size.y = std::max(std::min(canvas_size.y, 260.0f), kMinAltitudePlotSize.y);
+
+	const ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
+	ImDrawList* draw_list = ImGui::GetWindowDrawList();
+	const ImVec2 canvas_end(canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y);
+
+	draw_list->AddRectFilled(canvas_pos, canvas_end, IM_COL32(15, 18, 24, 255), 8.0f);
+	draw_list->AddRect(canvas_pos, canvas_end, IM_COL32(82, 96, 122, 255), 8.0f, 0, 1.5f);
+
+	const ImU32 grid_color = IM_COL32(65, 76, 96, 255);
+	const ImU32 axis_color = IM_COL32(124, 170, 255, 255);
+	const ImU32 line_color = IM_COL32(90, 210, 255, 255);
+	const ImU32 point_color = IM_COL32(255, 200, 90, 255);
+
+	for (int step = 1; step < 4; ++step) {
+		const float t = static_cast<float>(step) / 4.0f;
+		const float x = canvas_pos.x + t * canvas_size.x;
+		const float y = canvas_pos.y + t * canvas_size.y;
+		draw_list->AddLine(ImVec2(x, canvas_pos.y), ImVec2(x, canvas_end.y), grid_color, 1.0f);
+		draw_list->AddLine(ImVec2(canvas_pos.x, y), ImVec2(canvas_end.x, y), grid_color, 1.0f);
+	}
+
+	if (telemetry.altitude_history.empty()) {
+		draw_list->AddText(
+			ImVec2(canvas_pos.x + 12.0f, canvas_pos.y + 12.0f),
+			IM_COL32(210, 216, 230, 255),
+			"Waiting for altitude telemetry");
+		ImGui::InvisibleButton("altitude_plot", canvas_size);
+		return;
+	}
+
+	const float start_time_s = static_cast<float>(telemetry.altitude_history.front().time_boot_ms) / 1000.0f;
+	const float end_time_s = static_cast<float>(telemetry.altitude_history.back().time_boot_ms) / 1000.0f;
+	float min_altitude_m = telemetry.altitude_history.front().altitude_m;
+	float max_altitude_m = telemetry.altitude_history.front().altitude_m;
+	for (const AltitudeSample& sample : telemetry.altitude_history) {
+		min_altitude_m = std::min(min_altitude_m, sample.altitude_m);
+		max_altitude_m = std::max(max_altitude_m, sample.altitude_m);
+	}
+
+	const float altitude_padding = std::max((max_altitude_m - min_altitude_m) * 0.1f, 1.0f);
+	min_altitude_m -= altitude_padding;
+	max_altitude_m += altitude_padding;
+
+	std::vector<ImVec2> points;
+	points.reserve(telemetry.altitude_history.size());
+	for (const AltitudeSample& sample : telemetry.altitude_history) {
+		const float time_s = static_cast<float>(sample.time_boot_ms) / 1000.0f;
+		points.push_back(
+			altitude_to_canvas(
+				time_s,
+				sample.altitude_m,
+				canvas_pos,
+				canvas_size,
+				start_time_s,
+				end_time_s,
+				min_altitude_m,
+				max_altitude_m));
+	}
+
+	const ImVec2 bottom_left(canvas_pos.x, canvas_end.y - 1.0f);
+	const ImVec2 bottom_right(canvas_end.x, canvas_end.y - 1.0f);
+	draw_list->AddLine(bottom_left, bottom_right, axis_color, 1.5f);
+	if (min_altitude_m <= 0.0f && max_altitude_m >= 0.0f) {
+		const ImVec2 zero_left = altitude_to_canvas(
+			start_time_s,
+			0.0f,
+			canvas_pos,
+			canvas_size,
+			start_time_s,
+			end_time_s,
+			min_altitude_m,
+			max_altitude_m);
+		const ImVec2 zero_right = altitude_to_canvas(
+			end_time_s,
+			0.0f,
+			canvas_pos,
+			canvas_size,
+			start_time_s,
+			end_time_s,
+			min_altitude_m,
+			max_altitude_m);
+		draw_list->AddLine(zero_left, zero_right, axis_color, 1.5f);
+	}
+
+	if (points.size() > 1) {
+		draw_list->AddPolyline(points.data(), static_cast<int>(points.size()), line_color, 0, 2.0f);
+	}
+	const ImVec2& latest_point = points.back();
+	draw_list->AddCircleFilled(latest_point, 4.5f, point_color);
+	draw_list->AddCircle(latest_point, 7.0f, IM_COL32(255, 255, 255, 180), 0, 1.25f);
+
+	char label[96];
+	std::snprintf(label, sizeof(label), "%.1f to %.1f m", min_altitude_m, max_altitude_m);
+	draw_list->AddText(ImVec2(canvas_pos.x + 12.0f, canvas_pos.y + 10.0f), IM_COL32_WHITE, label);
+	std::snprintf(label, sizeof(label), "%.1f s window", std::max(end_time_s - start_time_s, 0.0f));
+	draw_list->AddText(ImVec2(canvas_pos.x + 12.0f, canvas_end.y - 24.0f), IM_COL32(210, 216, 230, 255), label);
+	std::snprintf(label, sizeof(label), "Current %.1f m", telemetry.altitude_history.back().altitude_m);
+	draw_list->AddText(ImVec2(canvas_end.x - 150.0f, canvas_pos.y + 10.0f), point_color, label);
+
+	ImGui::InvisibleButton("altitude_plot", canvas_size);
 }
 
 } // namespace detail
@@ -211,10 +326,6 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 	if (ImGui::Button("DISARM", ImVec2(120.0f, 0.0f)) && actions.on_disarm) {
 		actions.on_disarm();
 	}
-	ImGui::SameLine();
-	if (ImGui::Button("Clear Track", ImVec2(120.0f, 0.0f)) && actions.on_clear_track) {
-		actions.on_clear_track();
-	}
 	ImGui::EndDisabled();
 
 	ImGui::Text("Arm target altitude: %.1f m", state.arm_target_altitude_m);
@@ -251,8 +362,8 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 		}
 	}
 	ImGui::EndDisabled();
-	if (geofence_ready) {
-		goto_status = "Geofence received";
+	if (geofence_ready && goto_inside_geofence && goto_altitude_valid) {
+		goto_status = "Geofence received - ready to send Goto command";
 		goto_status_is_error = false;
 	} else if (!geofence_ready) {
 		goto_status = "Goto command disabled until full geofence is received";
@@ -306,6 +417,7 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 	ImGui::Separator();
 
 	detail::draw_position_plot(state.telemetry);
+	detail::draw_altitude_plot(state.telemetry);
 
 	ImGui::End();
 }

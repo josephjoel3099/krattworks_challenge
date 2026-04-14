@@ -51,7 +51,7 @@ std::mutex g_telemetry_mutex;
 std::mutex g_command_mutex;
 std::deque<PendingCommand> g_pending_commands;
 
-constexpr size_t kMaxHistoryPoints = 512;
+constexpr size_t kMaxAltitudeHistoryPoints = 512;
 constexpr uint8_t kGcsSystemId = 255;
 constexpr uint8_t kGcsComponentId = MAV_COMP_ID_SYSTEM_CONTROL;
 constexpr uint8_t kDroneSystemId = 1;
@@ -150,9 +150,14 @@ void update_local_position(const mavlink_message_t& msg)
 	g_telemetry.vz = pos.vz;
 	g_telemetry.has_position = true;
 	g_telemetry.last_message_time = std::chrono::steady_clock::now();
-	g_telemetry.position_history.emplace_back(pos.x, pos.y);
-	if (g_telemetry.position_history.size() > kMaxHistoryPoints) {
-		g_telemetry.position_history.pop_front();
+	const float altitude_m = -pos.z;
+	if (!g_telemetry.altitude_history.empty() && g_telemetry.altitude_history.back().time_boot_ms == pos.time_boot_ms) {
+		g_telemetry.altitude_history.back().altitude_m = altitude_m;
+	} else {
+		g_telemetry.altitude_history.push_back(gcs_ui::AltitudeSample{pos.time_boot_ms, altitude_m});
+		if (g_telemetry.altitude_history.size() > kMaxAltitudeHistoryPoints) {
+			g_telemetry.altitude_history.pop_front();
+		}
 	}
 }
 
@@ -351,12 +356,6 @@ TelemetrySnapshot get_telemetry_snapshot()
 	return g_telemetry;
 }
 
-void clear_position_history()
-{
-	std::lock_guard<std::mutex> lock(g_telemetry_mutex);
-	g_telemetry.position_history.clear();
-}
-
 DashboardState make_dashboard_state()
 {
 	DashboardState state;
@@ -378,7 +377,6 @@ DashboardActions make_dashboard_actions()
 	actions.on_send_goto = [](float x, float y, float altitude_m) {
 		return queue_override_goto_command(x, y, altitude_m);
 	};
-	actions.on_clear_track = [] { clear_position_history(); };
 	return actions;
 }
 

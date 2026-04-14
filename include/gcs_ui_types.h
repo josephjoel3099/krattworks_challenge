@@ -19,6 +19,11 @@ struct GeofenceSnapshot {
 	uint8_t received_count = 0;
 };
 
+struct AltitudeSample {
+	uint32_t time_boot_ms = 0;
+	float altitude_m = 0.0f;
+};
+
 struct TelemetrySnapshot {
 	uint8_t system_id = 0;
 	uint8_t component_id = 0;
@@ -36,7 +41,7 @@ struct TelemetrySnapshot {
 	bool has_heartbeat = false;
 	bool has_position = false;
 	std::chrono::steady_clock::time_point last_message_time{};
-	std::deque<ImVec2> position_history;
+	std::deque<AltitudeSample> altitude_history;
 	GeofenceSnapshot geofence;
 };
 
@@ -54,7 +59,6 @@ struct DashboardActions {
 	std::function<void()> on_land;
 	std::function<void()> on_disarm;
 	std::function<bool(float, float, float)> on_send_goto;
-	std::function<void()> on_clear_track;
 };
 
 } // namespace gcs_ui
