@@ -1,0 +1,51 @@
+#ifndef GCS_UI_TYPES_H
+#define GCS_UI_TYPES_H
+
+#include <imgui.h>
+
+#include <chrono>
+#include <cstdint>
+#include <deque>
+#include <functional>
+
+namespace gcs_ui {
+
+struct TelemetrySnapshot {
+	uint8_t system_id = 0;
+	uint8_t component_id = 0;
+	uint8_t vehicle_type = 0;
+	uint8_t base_mode = 0;
+	uint32_t custom_mode = 0;
+	uint8_t system_status = 0;
+	uint32_t time_boot_ms = 0;
+	float x = 0.0f;
+	float y = 0.0f;
+	float z = 0.0f;
+	float vx = 0.0f;
+	float vy = 0.0f;
+	float vz = 0.0f;
+	bool has_heartbeat = false;
+	bool has_position = false;
+	std::chrono::steady_clock::time_point last_message_time{};
+	std::deque<ImVec2> position_history;
+};
+
+struct DashboardState {
+	const char* host = "";
+	uint16_t gcs_port = 0;
+	uint16_t drone_port = 0;
+	float arm_target_altitude_m = 0.0f;
+	bool is_running = false;
+	TelemetrySnapshot telemetry;
+};
+
+struct DashboardActions {
+	std::function<void()> on_arm;
+	std::function<void()> on_land;
+	std::function<void()> on_disarm;
+	std::function<void()> on_clear_track;
+};
+
+} // namespace gcs_ui
+
+#endif // GCS_UI_TYPES_H
