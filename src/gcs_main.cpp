@@ -61,13 +61,28 @@ std::deque<PendingCommand> g_pending_commands;
 TeleopState g_teleop_state;
 
 constexpr size_t kMaxAltitudeHistoryPoints = 512;
-constexpr uint8_t kGcsSystemId = 255;
-constexpr uint8_t kGcsComponentId = MAV_COMP_ID_SYSTEM_CONTROL;
-constexpr uint8_t kDroneSystemId = 1;
-constexpr uint8_t kDroneComponentId = MAV_COMP_ID_AUTOPILOT1;
 constexpr auto kGeofenceFetchInterval = std::chrono::milliseconds(250);
 constexpr auto kManualControlInterval = std::chrono::milliseconds(50);
-constexpr float kArmedHoldAltitudeM = 20.0f;
+
+uint8_t gcs_system_id()
+{
+	return static_cast<uint8_t>(g_drone_config.gcs_system_id);
+}
+
+uint8_t gcs_component_id()
+{
+	return static_cast<uint8_t>(g_drone_config.gcs_component_id);
+}
+
+uint8_t drone_system_id()
+{
+	return static_cast<uint8_t>(g_drone_config.drone_system_id);
+}
+
+uint8_t drone_component_id()
+{
+	return static_cast<uint8_t>(g_drone_config.drone_component_id);
+}
 
 void signal_handler(int signum)
 {
@@ -101,7 +116,7 @@ void queue_mode_command(RequestedMode mode)
 		PendingCommandType::ModeChange,
 		mode,
 		{},
-		-kArmedHoldAltitudeM,
+		-g_drone_config.arm_target_altitude_m,
 	});
 }
 
@@ -271,10 +286,10 @@ void send_set_mode_command(UdpSocket& socket, RequestedMode mode)
 	}
 
 	mavlink_msg_set_mode_pack(
-		kGcsSystemId,
-		kGcsComponentId,
+		gcs_system_id(),
+		gcs_component_id(),
 		&msg,
-		kDroneSystemId,
+		drone_system_id(),
 		base_mode,
 		static_cast<uint32_t>(mode));
 
@@ -289,11 +304,11 @@ void send_override_goto_command(UdpSocket& socket, const XYPoint& target, float 
 {
 	mavlink_message_t msg;
 	mavlink_msg_command_long_pack(
-		kGcsSystemId,
-		kGcsComponentId,
+		gcs_system_id(),
+		gcs_component_id(),
 		&msg,
-		kDroneSystemId,
-		kDroneComponentId,
+		drone_system_id(),
+		drone_component_id(),
 		MAV_CMD_OVERRIDE_GOTO,
 		0,
 		static_cast<float>(MAV_GOTO_DO_HOLD),
@@ -319,11 +334,11 @@ void send_geofence_fetch_request(UdpSocket& socket, uint8_t point_index)
 {
 	mavlink_message_t msg;
 	mavlink_msg_fence_fetch_point_pack(
-		kGcsSystemId,
-		kGcsComponentId,
+		gcs_system_id(),
+		gcs_component_id(),
 		&msg,
-		kDroneSystemId,
-		kDroneComponentId,
+		drone_system_id(),
+		drone_component_id(),
 		point_index);
 
 	uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
@@ -338,10 +353,10 @@ void send_manual_control(UdpSocket& socket, const TeleopState& teleop_state)
 	const int16_t y = static_cast<int16_t>(std::lround(std::clamp(teleop_state.y_axis, -1.0f, 1.0f) * 1000.0f));
 	const int16_t z = static_cast<int16_t>(std::lround(std::clamp(teleop_state.z_axis, -1.0f, 1.0f) * 1000.0f));
 	mavlink_msg_manual_control_pack(
-		kGcsSystemId,
-		kGcsComponentId,
+		gcs_system_id(),
+		gcs_component_id(),
 		&msg,
-		kDroneSystemId,
+		drone_system_id(),
 		x,
 		y,
 		z,
@@ -451,7 +466,7 @@ DashboardState make_dashboard_state()
 	state.host = g_shared_config.host.c_str();
 	state.gcs_port = g_gcs_config.gcs_port;
 	state.drone_port = g_gcs_config.drone_port;
-	state.arm_target_altitude_m = kArmedHoldAltitudeM;
+	state.arm_target_altitude_m = g_drone_config.arm_target_altitude_m;
 	state.is_running = g_running.load();
 	state.teleop_enabled = get_teleop_state().enabled;
 	state.telemetry = get_telemetry_snapshot();
@@ -501,7 +516,6 @@ int main()
 		return 1;
 	}
 
-	g_drone_config.arm_target_altitude_m = kArmedHoldAltitudeM;
 
 	g_drone_addr = IpAddress{g_shared_config.host.c_str(), g_gcs_config.drone_port};
 

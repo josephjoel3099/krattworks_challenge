@@ -13,21 +13,33 @@
 #include <string>
 #include <vector>
 
+/**
+ * Network settings shared by the drone and the GCS.
+ */
 struct SharedConfig {
 	std::string host;
 };
 
+/**
+ * Runtime configuration for the ground control station.
+ */
 struct GcsConfig {
 	uint16_t gcs_port = 0;
 	uint16_t drone_port = 0;
 	int poll_timeout_ms = 0;
 };
 
+/**
+ * Simple 2D point expressed in local meters.
+ */
 struct XYPoint {
 	float x = 0.0f;
 	float y = 0.0f;
 };
 
+/**
+ * User-configurable drone simulation and communication settings.
+ */
 struct DroneConfig {
 	uint16_t drone_port = 0;
 	uint16_t gcs_port = 0;
@@ -38,7 +50,13 @@ struct DroneConfig {
 	float climb_rate_mps = 0.0f;
 	float land_rate_mps = 0.0f;
 	float arm_target_altitude_m = 0.0f;
+	float horizontal_arrival_tolerance_m = 0.75f;
+	int manual_control_timeout_ms = 250;
 	int rx_poll_timeout_ms = 0;
+	uint16_t drone_system_id = 1;
+	uint16_t drone_component_id = 1;
+	uint16_t gcs_system_id = 255;
+	uint16_t gcs_component_id = 250;
 	std::array<XYPoint, 4> geofence_corners_m{};
 };
 
@@ -266,7 +284,13 @@ inline DroneConfig load_drone_config()
 	set_if_present_from_json_number(*json, "climb_rate_mps", cfg.climb_rate_mps);
 	set_if_present_from_json_number(*json, "land_rate_mps", cfg.land_rate_mps);
 	set_if_present_from_json_number(*json, "arm_target_altitude_m", cfg.arm_target_altitude_m);
+	set_if_present_from_json_number(*json, "horizontal_arrival_tolerance_m", cfg.horizontal_arrival_tolerance_m);
+	set_if_present_from_json_number(*json, "manual_control_timeout_ms", cfg.manual_control_timeout_ms);
 	set_if_present_from_json_number(*json, "rx_poll_timeout_ms", cfg.rx_poll_timeout_ms);
+	set_if_present_from_json_number(*json, "drone_system_id", cfg.drone_system_id);
+	set_if_present_from_json_number(*json, "drone_component_id", cfg.drone_component_id);
+	set_if_present_from_json_number(*json, "gcs_system_id", cfg.gcs_system_id);
+	set_if_present_from_json_number(*json, "gcs_component_id", cfg.gcs_component_id);
 	if (const auto geofence_corners = get_json_xy_points(*json, "geofence_corners_m"); geofence_corners.has_value()) {
 		cfg.geofence_corners_m = *geofence_corners;
 	}
@@ -294,7 +318,13 @@ inline bool is_valid(const DroneConfig& cfg)
 		&& cfg.climb_rate_mps > 0.0f
 		&& cfg.land_rate_mps > 0.0f
 		&& cfg.arm_target_altitude_m > 0.0f
+		&& cfg.horizontal_arrival_tolerance_m > 0.0f
+		&& cfg.manual_control_timeout_ms > 0
 		&& cfg.rx_poll_timeout_ms > 0
+		&& cfg.drone_system_id > 0
+		&& cfg.drone_component_id > 0
+		&& cfg.gcs_system_id > 0
+		&& cfg.gcs_component_id > 0
 		&& polygon_area(cfg.geofence_corners_m) > 0.01f;
 }
 

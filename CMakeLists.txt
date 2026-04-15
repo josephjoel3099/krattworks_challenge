@@ -39,7 +39,10 @@ target_link_libraries(GCS PRIVATE SimpleUdp imgui)
 target_include_directories(GCS PRIVATE ${PROJECT_INCLUDE_DIR} ${PROJECT_CONFIG_DIR})
 
 # Drone
-add_executable(Drone src/drone_main.cpp)
+add_executable(Drone
+	src/drone_main.cpp
+	src/drone_simulator.cpp
+	src/drone_mavlink_node.cpp)
 target_link_libraries(Drone PRIVATE SimpleUdp)
 target_include_directories(Drone PRIVATE ${PROJECT_INCLUDE_DIR} ${PROJECT_CONFIG_DIR})
 

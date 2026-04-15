@@ -23,7 +23,7 @@ public:
 		shutdown();
 	}
 
-	bool initialize(const char* title = "Krattworks GCS")
+	bool initialize(const char* title = "GCS")
 	{
 		if (!glfwInit()) {
 			std::fprintf(stderr, "GCS: failed to initialize GLFW\n");
