@@ -28,7 +28,6 @@ void GcsMavlinkNode::run()
 	UdpSocket server;
 	if (!server.create(shared_config_.gcs_port, true)) {
 		std::fprintf(stderr, "GCS: failed to create UDP server on port %u\n", shared_config_.gcs_port);
-		running_ = false;
 		return;
 	}
 
@@ -59,25 +58,23 @@ void GcsMavlinkNode::run()
 			last_manual_control_time = now;
 		}
 
-		if (!server.poll_read(gcs_config_.poll_timeout_ms)) {
-			continue;
-		}
+		if (server.poll_read(std::max(1, gcs_config_.poll_timeout_ms))) {
+            while (server.available() > 0) {
+                char buffer[1024];
+                IpAddress from;
+                const int bytes = server.recvfrom(buffer, sizeof(buffer), from);
+                if (bytes <= 0) {
+                    continue;
+                }
 
-		while (server.available() > 0) {
-			char buffer[1024];
-			IpAddress from;
-			const int bytes = server.recvfrom(buffer, sizeof(buffer), from);
-			if (bytes <= 0) {
-				continue;
-			}
-
-			for (int i = 0; i < bytes; ++i) {
-				mavlink_message_t msg;
-				if (mavlink_parse_char(MAVLINK_COMM_0, static_cast<uint8_t>(buffer[i]), &msg, &parse_status)) {
-					handleMavlinkMessage(msg);
-				}
-			}
-		}
+                for (int i = 0; i < bytes; ++i) {
+                    mavlink_message_t msg;
+                    if (mavlink_parse_char(MAVLINK_COMM_0, static_cast<uint8_t>(buffer[i]), &msg, &parse_status)) {
+                        handleMavlinkMessage(msg);
+                    }
+                }
+            }
+        }
 	}
 
 	server.close();
@@ -264,19 +261,52 @@ void GcsMavlinkNode::handleMavlinkMessage(const mavlink_message_t& msg)
 
 bool GcsMavlinkNode::nextMissingGeofenceIndex(uint8_t& index) const
 {
-	std::lock_guard<std::mutex> lock(telemetry_mutex_);
+    std::lock_guard<std::mutex> lock(telemetry_mutex_);
 	const size_t target_count = telemetry_.geofence.expected_count == 0
-		? telemetry_.geofence.vertices.size()
-		: std::min<size_t>(telemetry_.geofence.expected_count, telemetry_.geofence.vertices.size());
-
+    ? telemetry_.geofence.vertices.size()
+    : std::min<size_t>(telemetry_.geofence.expected_count, telemetry_.geofence.vertices.size());
+    
 	for (size_t point_index = 0; point_index < target_count; ++point_index) {
-		if (!telemetry_.geofence.received[point_index]) {
-			index = static_cast<uint8_t>(point_index);
+        if (!telemetry_.geofence.received[point_index]) {
+            index = static_cast<uint8_t>(point_index);
 			return true;
 		}
 	}
-
+    
 	return false;
+}
+
+void GcsMavlinkNode::requestGeofenceIfNeeded(UdpSocket& socket, const std::chrono::steady_clock::time_point& now)
+{
+    const auto geofence_interval = std::chrono::milliseconds(gcs_config_.geofence_fetch_interval_ms);
+    if (last_geofence_request_time_.time_since_epoch().count() != 0
+    && now - last_geofence_request_time_ < geofence_interval) {
+        return;
+    }
+    
+    uint8_t point_index = 0;
+    if (!nextMissingGeofenceIndex(point_index)) {
+        return;
+    }
+    
+    sendGeofenceFetchRequest(socket, point_index);
+    last_geofence_request_time_ = now;
+}
+
+void GcsMavlinkNode::sendGeofenceFetchRequest(UdpSocket& socket, uint8_t point_index) const
+{
+mavlink_message_t msg;
+mavlink_msg_fence_fetch_point_pack(
+    ids_.gcs_system_id,
+    ids_.gcs_component_id,
+    &msg,
+    ids_.drone_system_id,
+    ids_.drone_component_id,
+    point_index);
+
+uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
+const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &msg);
+socket.sendto(tx_buf, len, drone_addr_);
 }
 
 void GcsMavlinkNode::sendSetModeCommand(UdpSocket& socket, RequestedMode mode) const
@@ -327,29 +357,13 @@ void GcsMavlinkNode::sendOverrideGotoCommand(
 	uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
 	const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &msg);
 	socket.sendto(tx_buf, len, drone_addr_);
-
+    
 	std::printf(
-		"GCS: Sent MAV_CMD_OVERRIDE_GOTO - X=%.2f Y=%.2f Z=%.2f\n",
+        "GCS: Sent MAV_CMD_OVERRIDE_GOTO - X=%.2f Y=%.2f Z=%.2f\n",
 		target.x,
 		target.y,
 		target_altitude_ned_m);
-}
-
-void GcsMavlinkNode::sendGeofenceFetchRequest(UdpSocket& socket, uint8_t point_index) const
-{
-	mavlink_message_t msg;
-	mavlink_msg_fence_fetch_point_pack(
-		ids_.gcs_system_id,
-		ids_.gcs_component_id,
-		&msg,
-		ids_.drone_system_id,
-		ids_.drone_component_id,
-		point_index);
-
-	uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
-	const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &msg);
-	socket.sendto(tx_buf, len, drone_addr_);
-}
+    }
 
 void GcsMavlinkNode::sendManualControl(UdpSocket& socket, const TeleopState& teleop_state) const
 {
@@ -391,23 +405,6 @@ void GcsMavlinkNode::sendManualControl(UdpSocket& socket, const TeleopState& tel
 	uint8_t tx_buf[MAVLINK_MAX_PACKET_LEN];
 	const uint16_t len = mavlink_msg_to_send_buffer(tx_buf, &msg);
 	socket.sendto(tx_buf, len, drone_addr_);
-}
-
-void GcsMavlinkNode::requestGeofenceIfNeeded(UdpSocket& socket, const std::chrono::steady_clock::time_point& now)
-{
-	const auto geofence_interval = std::chrono::milliseconds(gcs_config_.geofence_fetch_interval_ms);
-	if (last_geofence_request_time_.time_since_epoch().count() != 0
-		&& now - last_geofence_request_time_ < geofence_interval) {
-		return;
-	}
-
-	uint8_t point_index = 0;
-	if (!nextMissingGeofenceIndex(point_index)) {
-		return;
-	}
-
-	sendGeofenceFetchRequest(socket, point_index);
-	last_geofence_request_time_ = now;
 }
 
 gcs_ui::DashboardState GcsMavlinkNode::makeDashboardState() const

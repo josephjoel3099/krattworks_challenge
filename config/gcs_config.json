@@ -1,5 +1,5 @@
 {
-	"poll_timeout_ms": 100,
+	"poll_timeout_ms": 5,
 	"geofence_fetch_interval_ms": 250,
 	"manual_control_interval_ms": 50,
 	"telemetry_stale_timeout_ms": 1500,
