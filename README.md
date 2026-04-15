@@ -43,8 +43,9 @@ cd krattworks_challenge/build
 ```
 
 ## Run unit test
+In a new terminal
 ```
-cd build
+cd krattworks_challenge/build
 ctest
 ```
 
