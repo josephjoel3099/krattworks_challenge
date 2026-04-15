@@ -49,6 +49,14 @@ target_link_libraries(Drone PRIVATE SimpleUdp)
 target_include_directories(Drone PRIVATE ${PROJECT_INCLUDE_DIR} ${PROJECT_CONFIG_DIR})
 
 # Unit Tests
-add_executable(UnitTests test/test_main.cpp)
-target_link_libraries(UnitTests PRIVATE gtest SimpleUdp)
-target_include_directories(UnitTests PRIVATE ${PROJECT_INCLUDE_DIR} ${PROJECT_CONFIG_DIR})
+enable_testing()
+add_executable(
+	UnitTests
+	test/test_main.cpp
+	src/drone_simulator.cpp
+	src/drone_mavlink_node.cpp
+	src/gcs_mavlink_node.cpp)
+target_link_libraries(UnitTests PRIVATE gtest SimpleUdp imgui)
+target_include_directories(UnitTests PRIVATE ${PROJECT_INCLUDE_DIR} ${PROJECT_CONFIG_DIR} ${IMGUI_DIR})
+include(GoogleTest)
+gtest_discover_tests(UnitTests)
