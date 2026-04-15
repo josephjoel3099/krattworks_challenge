@@ -1,8 +1,8 @@
 {
 	"max_velocity_mps": 10.0,
 	"manual_horizontal_velocity_mps": 5.0,
-	"update_rate_hz": 100.0,
-	"heartbeat_rate_hz": 1.0,
+	"update_rate_hz": 10.0,
+	"heartbeat_rate_hz": 10.0,
 	"position_rate_hz": 10.0,
 	"climb_rate_mps": 5.0,
 	"manual_vertical_velocity_mps": 5.0,
