@@ -23,20 +23,20 @@ DroneMavlinkNode::DroneMavlinkNode(
 
 void DroneMavlinkNode::run()
 {
-	UdpSocket socket;
-	if (!socket.create(drone_config_.drone_port, false)) {
-		std::fprintf(stderr, "Drone: failed to create UDP socket on port %u\n", drone_config_.drone_port);
+	UdpSocket client;
+	if (!client.create(drone_config_.drone_port, true)) {
+		std::fprintf(stderr, "Drone: failed to create UDP client on port %u\n", drone_config_.drone_port);
 		return;
 	}
 
 	const IpAddress gcs_addr{shared_config_.host.c_str(), drone_config_.gcs_port};
 	std::printf(
-		"Drone: sending telemetry from %s:%u to %s\n",
+		"Drone: UDP client created on %s:%u, sending to %s\n",
 		shared_config_.host.c_str(),
 		drone_config_.drone_port,
 		gcs_addr.to_string().c_str());
 
-	using clock = std::chrono::steady_clock;
+	using clock = std::chrono::steady_clock; // sim clock
 	const auto start = clock::now();
 	auto next_hb = start;
 	auto next_pos = start;
@@ -45,24 +45,24 @@ void DroneMavlinkNode::run()
 	const auto pos_interval = std::chrono::duration<double>(
 		1.0 / std::max(0.1, static_cast<double>(drone_config_.position_rate_hz)));
 
-	uint8_t rx_buf[2048];
 	mavlink_status_t parse_status{};
 
 	while (running_) {
 		const auto now = clock::now();
 
-		if (socket.poll_read(std::max(1, drone_config_.rx_poll_timeout_ms))) {
-			while (socket.available() > 0) {
+		if (client.poll_read(std::max(1, drone_config_.rx_poll_timeout_ms))) {
+			while (client.available() > 0) {
+				char buffer[1024];
 				IpAddress from;
-				const int bytes = socket.recvfrom(rx_buf, sizeof(rx_buf), from);
+				const int bytes = client.recvfrom(buffer, sizeof(buffer), from);
 				if (bytes <= 0) {
 					continue;
 				}
 
 				for (int i = 0; i < bytes; ++i) {
 					mavlink_message_t msg;
-					if (mavlink_parse_char(MAVLINK_COMM_0, rx_buf[i], &msg, &parse_status)) {
-						handleMavlinkCommand(msg, socket, gcs_addr);
+					if (mavlink_parse_char(MAVLINK_COMM_0, static_cast<uint8_t>(buffer[i]), &msg, &parse_status)) {
+						handleMavlinkCommand(msg, client, gcs_addr);
 					}
 				}
 			}
@@ -81,7 +81,7 @@ void DroneMavlinkNode::run()
 				telemetry_.getMode() == MAVMode::GUIDED_DISARMED ? MAV_MODE_GUIDED_DISARMED : MAV_MODE_GUIDED_ARMED,
 				static_cast<uint32_t>(telemetry_.getMode()),
 				MAV_STATE_ACTIVE);
-			sendMavlinkMessage(socket, gcs_addr, hb_msg);
+			sendMavlinkMessage(client, gcs_addr, hb_msg);
 			next_hb += std::chrono::duration_cast<clock::duration>(hb_interval);
 		}
 
@@ -100,14 +100,14 @@ void DroneMavlinkNode::run()
 				telemetry_.getVx(),
 				telemetry_.getVy(),
 				telemetry_.getVz());
-			sendMavlinkMessage(socket, gcs_addr, pos_msg);
+			sendMavlinkMessage(client, gcs_addr, pos_msg);
 			next_pos += std::chrono::duration_cast<clock::duration>(pos_interval);
 		}
 
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	}
 
-	socket.close();
+	client.close();
 }
 
 void DroneMavlinkNode::sendMavlinkMessage(
