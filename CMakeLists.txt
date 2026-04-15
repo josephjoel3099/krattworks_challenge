@@ -34,7 +34,9 @@ set(PROJECT_CONFIG_DIR ${CMAKE_CURRENT_SOURCE_DIR}/config)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libs/googletest)
 
 # GCS
-add_executable(GCS src/gcs_main.cpp)
+add_executable(GCS
+	src/gcs_main.cpp
+	src/gcs_mavlink_node.cpp)
 target_link_libraries(GCS PRIVATE SimpleUdp imgui)
 target_include_directories(GCS PRIVATE ${PROJECT_INCLUDE_DIR} ${PROJECT_CONFIG_DIR})
 

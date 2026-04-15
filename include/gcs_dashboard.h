@@ -98,11 +98,11 @@ inline ImVec2 altitude_to_canvas(
 		origin.y + (1.0f - normalized_y) * size.y);
 }
 
-inline bool has_recent_data(const TelemetrySnapshot& telemetry)
+inline bool has_recent_data(const TelemetrySnapshot& telemetry, int stale_timeout_ms)
 {
 	const auto now = std::chrono::steady_clock::now();
 	return telemetry.last_message_time.time_since_epoch().count() != 0
-		&& std::chrono::duration_cast<std::chrono::milliseconds>(now - telemetry.last_message_time).count() < 1500;
+		&& std::chrono::duration_cast<std::chrono::milliseconds>(now - telemetry.last_message_time).count() < stale_timeout_ms;
 }
 
 enum class VehicleMode {
@@ -112,9 +112,9 @@ enum class VehicleMode {
 	Land,
 };
 
-inline VehicleMode vehicle_mode(const TelemetrySnapshot& telemetry)
+inline VehicleMode vehicle_mode(const TelemetrySnapshot& telemetry, int stale_timeout_ms)
 {
-	if (!telemetry.has_heartbeat || !has_recent_data(telemetry)) {
+	if (!telemetry.has_heartbeat || !has_recent_data(telemetry, stale_timeout_ms)) {
 		return VehicleMode::Disconnected;
 	}
 
@@ -352,8 +352,8 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 	ImGui::SetNextWindowSize(panel_size, ImGuiCond_Appearing);
 	ImGui::Begin("Ground Control Station", nullptr, ImGuiWindowFlags_NoCollapse);
 
-	const bool is_connected = detail::has_recent_data(state.telemetry);
-	const detail::VehicleMode current_mode = detail::vehicle_mode(state.telemetry);
+	const bool is_connected = detail::has_recent_data(state.telemetry, state.telemetry_stale_timeout_ms);
+	const detail::VehicleMode current_mode = detail::vehicle_mode(state.telemetry, state.telemetry_stale_timeout_ms);
 	const bool is_disarmed = current_mode == detail::VehicleMode::GuidedDisarmed;
 	const bool is_armed = current_mode == detail::VehicleMode::GuidedArmed || current_mode == detail::VehicleMode::Land;
 	const bool teleop_allowed = state.is_running && is_connected && current_mode == detail::VehicleMode::GuidedArmed;

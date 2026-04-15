@@ -12,6 +12,7 @@
 
 namespace gcs_ui {
 
+/** Snapshot of the currently known geofence polygon. */
 struct GeofenceSnapshot {
 	std::array<ImVec2, 4> vertices{};
 	std::array<bool, 4> received{};
@@ -19,11 +20,13 @@ struct GeofenceSnapshot {
 	uint8_t received_count = 0;
 };
 
+/** A single altitude history sample for plotting. */
 struct AltitudeSample {
 	uint32_t time_boot_ms = 0;
 	float altitude_m = 0.0f;
 };
 
+/** Thread-safe telemetry data copied from the MAVLink worker. */
 struct TelemetrySnapshot {
 	uint8_t system_id = 0;
 	uint8_t component_id = 0;
@@ -45,6 +48,7 @@ struct TelemetrySnapshot {
 	GeofenceSnapshot geofence;
 };
 
+/** Immutable UI state consumed by the dashboard for a single frame. */
 struct DashboardState {
 	const char* host = "";
 	uint16_t gcs_port = 0;
@@ -52,11 +56,13 @@ struct DashboardState {
 	float arm_target_altitude_m = 0.0f;
 	float manual_horizontal_velocity_mps = 0.0f;
 	float manual_vertical_velocity_mps = 0.0f;
+	int telemetry_stale_timeout_ms = 1500;
 	bool is_running = false;
 	bool teleop_enabled = false;
 	TelemetrySnapshot telemetry;
 };
 
+/** Callback bundle used by the dashboard to request user actions. */
 struct DashboardActions {
 	std::function<void()> on_arm;
 	std::function<void()> on_land;

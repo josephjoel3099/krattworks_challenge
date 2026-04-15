@@ -26,7 +26,23 @@ struct SharedConfig {
  * Runtime configuration for the ground control station.
  */
 struct GcsConfig {
-	int poll_timeout_ms = 0;
+	int poll_timeout_ms = 100;
+	int geofence_fetch_interval_ms = 250;
+	int manual_control_interval_ms = 50;
+	int telemetry_stale_timeout_ms = 1500;
+	int max_altitude_history_points = 512;
+};
+
+/**
+ * Window and rendering settings for the GCS UI.
+ */
+struct GuiConfig {
+	std::string window_title = "GCS";
+	int window_width = 1280;
+	int window_height = 800;
+	float clear_color_r = 0.08f;
+	float clear_color_g = 0.09f;
+	float clear_color_b = 0.12f;
 };
 
 /**
@@ -281,6 +297,29 @@ inline GcsConfig load_gcs_config()
 	}
 
 	set_if_present_from_json_number(*json, "poll_timeout_ms", cfg.poll_timeout_ms);
+	set_if_present_from_json_number(*json, "geofence_fetch_interval_ms", cfg.geofence_fetch_interval_ms);
+	set_if_present_from_json_number(*json, "manual_control_interval_ms", cfg.manual_control_interval_ms);
+	set_if_present_from_json_number(*json, "telemetry_stale_timeout_ms", cfg.telemetry_stale_timeout_ms);
+	set_if_present_from_json_number(*json, "max_altitude_history_points", cfg.max_altitude_history_points);
+	return cfg;
+}
+
+inline GuiConfig load_gui_config()
+{
+	GuiConfig cfg;
+	const auto json = read_config_text("gui_config.json");
+	if (!json.has_value()) {
+		return cfg;
+	}
+
+	if (const auto title = get_json_string(*json, "window_title"); title.has_value() && !title->empty()) {
+		cfg.window_title = *title;
+	}
+	set_if_present_from_json_number(*json, "window_width", cfg.window_width);
+	set_if_present_from_json_number(*json, "window_height", cfg.window_height);
+	set_if_present_from_json_number(*json, "clear_color_r", cfg.clear_color_r);
+	set_if_present_from_json_number(*json, "clear_color_g", cfg.clear_color_g);
+	set_if_present_from_json_number(*json, "clear_color_b", cfg.clear_color_b);
 	return cfg;
 }
 
@@ -328,7 +367,18 @@ inline bool is_valid(const SharedConfig& cfg)
 
 inline bool is_valid(const GcsConfig& cfg)
 {
-	return cfg.poll_timeout_ms > 0;
+	return cfg.poll_timeout_ms > 0
+		&& cfg.geofence_fetch_interval_ms > 0
+		&& cfg.manual_control_interval_ms > 0
+		&& cfg.telemetry_stale_timeout_ms > 0
+		&& cfg.max_altitude_history_points > 0;
+}
+
+inline bool is_valid(const GuiConfig& cfg)
+{
+	return !cfg.window_title.empty()
+		&& cfg.window_width > 0
+		&& cfg.window_height > 0;
 }
 
 inline bool is_valid(const DroneConfig& cfg)

@@ -1,6 +1,7 @@
 #ifndef GCS_GUI_HOST_H
 #define GCS_GUI_HOST_H
 
+#include <app_config.h>
 #include <gcs_dashboard.h>
 
 #include <GLFW/glfw3.h>
@@ -15,6 +16,11 @@ namespace gcs_ui {
 class GuiHost {
 public:
 	GuiHost() = default;
+	explicit GuiHost(const GuiConfig& config)
+		: config_(config)
+	{
+	}
+
 	GuiHost(const GuiHost&) = delete;
 	GuiHost& operator=(const GuiHost&) = delete;
 
@@ -23,7 +29,8 @@ public:
 		shutdown();
 	}
 
-	bool initialize(const char* title = "GCS")
+	/** Initializes GLFW, ImGui, and the main application window. */
+	bool initialize(const char* title = nullptr)
 	{
 		if (!glfwInit()) {
 			std::fprintf(stderr, "GCS: failed to initialize GLFW\n");
@@ -33,7 +40,8 @@ public:
 		glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
 		glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 
-		window_ = glfwCreateWindow(kWindowWidth, kWindowHeight, title, nullptr, nullptr);
+		const char* requested_title = (title != nullptr && title[0] != '\0') ? title : config_.window_title.c_str();
+		window_ = glfwCreateWindow(config_.window_width, config_.window_height, requested_title, nullptr, nullptr);
 		if (!window_) {
 			std::fprintf(stderr, "GCS: failed to create GLFW window\n");
 			glfwTerminate();
@@ -72,6 +80,7 @@ public:
 		return true;
 	}
 
+	/** Releases ImGui and GLFW resources. */
 	void shutdown()
 	{
 		if (!is_initialized_) {
@@ -89,11 +98,13 @@ public:
 		is_initialized_ = false;
 	}
 
+	/** Returns true when the window has been closed by the user. */
 	bool should_close() const
 	{
 		return !window_ || glfwWindowShouldClose(window_);
 	}
 
+	/** Begins a new ImGui frame. */
 	void begin_frame()
 	{
 		glfwPollEvents();
@@ -102,11 +113,13 @@ public:
 		ImGui::NewFrame();
 	}
 
+	/** Renders the ground control dashboard for the current frame. */
 	void render_dashboard(const DashboardState& state, const DashboardActions& actions)
 	{
 		gcs_ui::render_dashboard(state, actions);
 	}
 
+	/** Finalizes rendering and presents the frame to the display. */
 	void end_frame()
 	{
 		ImGui::Render();
@@ -114,16 +127,14 @@ public:
 		int display_height = 0;
 		glfwGetFramebufferSize(window_, &display_width, &display_height);
 		glViewport(0, 0, display_width, display_height);
-		glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
+		glClearColor(config_.clear_color_r, config_.clear_color_g, config_.clear_color_b, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 		glfwSwapBuffers(window_);
 	}
 
 private:
-	static constexpr int kWindowWidth = 1280;
-	static constexpr int kWindowHeight = 800;
-
+	GuiConfig config_{};
 	GLFWwindow* window_ = nullptr;
 	bool is_initialized_ = false;
 	const char* glsl_version_ = "#version 130";
