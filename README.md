@@ -15,20 +15,67 @@ A simple UDP client-server drone application with a simulated drone client, grou
 - [MAVLink C Library v2](https://github.com/mavlink/c_library_v2.git)
 - [Google Test](https://github.com/google/googletest.git)
 
-### Pull submodules
+### Clone with submodules
 ```
-
+git clone --recurse-submodules https://github.com/josephjoel3099/krattworks_challenge.git
 ```
 
 ## Build Instructions
 ```
-rm -rf build
+cd krattworks_challenge
 mkdir build
 cd build
 
 cmake .. -DCMAKE_CXX_COMPILER=g++
 cmake --build .
 ```
+
+## Run unit test
+```
+cd build
+ctest
+```
+
+## Notes
+### Initial planning
+
+<p align="center">
+<img src="docs/basic_system.png" width="500"/>
+</p>
+
+<p align="center">
+<img src="docs/gui_planning.png" width="500"/>
+</p>
+
+### Architecture
+- The simulated drone, mavlink parsing and the GCS gui are separate threads that can run independantly.
+- The drone hosts the steps in operations like arm, disarm, land and the GCS gui only triggers an action, this means even if the connection is lost after trigger the drone safely caries out the last command.
+- The simulated drone stops immediately at the edge of the geofence. A real drone will need a padding at which the halt will be triggered so it does not pass the fence. 
+- Disarm is the default fallback for SET_MODE. If an unknown command is sent the drone safely disarms. The other alternative would be to ignore unknown command. Both design choices were considered but the former was implemented.
+
+<p align="center">
+<img src="docs/set_mode_feature.png" width="500"/>
+</p>
+
+- An altitude fence was not set for this simulated drone. This means the drone can climb unlimited using manual control. This could be a specification or limitation in a real drone.
+- Configs of the drone are chosen without considering physical constraints of hardware. If a specific hardware is mentioned the configs can be matched.
+
+### Useful links
+- [SimpleGCS](https://github.com/Sanmopre/Simple_GCS)
+- [LucidChart](https://www.lucidchart.com/pages)
+
+### Further steps
+- Doxgen doc for better understanding of the code.
+- More fine tunning for better time efficiency and resource usage.
+- Connect to physics based sim instead of dum sim drone.
+- CI/CD with automated tests on Github.
+- Conainerize to match deployment platform.
+
+## GCS Panel
+
+<p align="center">
+<img src="docs/GCS_gui.gif" width="600"/>
+</p>
 
 ## License
 MIT License
