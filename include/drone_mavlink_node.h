@@ -1,3 +1,10 @@
+/**
+ * @file drone_mavlink_node.h
+ * @brief Drone-side MAVLink transport for the simulator process.
+ *
+ * Exposes the small public interface used to publish simulated telemetry and
+ * receive control commands over UDP.
+ */
 #ifndef DRONE_MAVLINK_NODE_H
 #define DRONE_MAVLINK_NODE_H
 
@@ -11,7 +18,8 @@
 #include <cstdint>
 
 /**
- * MAVLink identifiers used by the drone endpoint.
+ * @struct DroneMavlinkIds
+ * @brief MAVLink identifiers used by the drone endpoint.
  */
 struct DroneMavlinkIds {
 	uint8_t drone_system_id = 1;
@@ -21,16 +29,28 @@ struct DroneMavlinkIds {
 };
 
 /**
- * UDP/MAVLink communication loop for the simulated drone.
+ * @class DroneMavlinkNode
+ * @brief Bridges the simulator state to UDP/MAVLink traffic.
+ *
+ * Publishes heartbeat and local-position updates while handling incoming mode,
+ * geofence, goto, and teleoperation commands from the ground station.
  */
 class DroneMavlinkNode {
 public:
+	/**
+	 * @brief Creates the drone MAVLink endpoint.
+	 * @param telemetry Reference to the simulator state provider.
+	 * @param shared_config Shared network configuration.
+	 * @param drone_config Drone-specific runtime settings.
+	 * @param running Shared shutdown flag for the process.
+	 */
 	DroneMavlinkNode(
 		DroneTelemetrySimulator& telemetry,
 		const SharedConfig& shared_config,
 		const DroneConfig& drone_config,
 		std::atomic_bool& running);
 
+	/** @brief Runs the blocking MAVLink loop until shutdown is requested. */
 	void run();
 
 private:

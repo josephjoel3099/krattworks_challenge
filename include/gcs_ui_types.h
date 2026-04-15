@@ -1,3 +1,7 @@
+/**
+ * @file gcs_ui_types.h
+ * @brief Shared UI-facing state types for the GCS dashboard.
+ */
 #ifndef GCS_UI_TYPES_H
 #define GCS_UI_TYPES_H
 

@@ -1,3 +1,10 @@
+/**
+ * @file drone_simulator.cpp
+ * @brief Motion model and state transitions for the simulated drone.
+ *
+ * Implements a lightweight flight model with geofence enforcement, goto logic,
+ * and manual teleoperation in local NED coordinates.
+ */
 #include <drone_simulator.h>
 
 #include <algorithm>
@@ -17,6 +24,8 @@ DroneTelemetrySimulator::DroneTelemetrySimulator(const DroneConfig& config)
 	  },
 	  geofence_corners_(app_config::sort_geofence_corners(config.geofence_corners_m))
 {
+	// Spawn the vehicle at the center of the configured geofence so every run
+	// starts from a safe, reachable location.
 	const XYPoint launch_position = app_config::compute_polygon_centroid(geofence_corners_);
 	state_.x = launch_position.x;
 	state_.y = launch_position.y;
@@ -206,6 +215,8 @@ void DroneTelemetrySimulator::update()
 	}
 	last_update_time_ = now;
 
+	// Treat manual-control input as short lived: if the operator stops sending
+	// commands, the simulator smoothly falls back to guided hold behavior.
 	const bool manual_control_active = manual_control_.active
 		&& manual_control_.last_command_time.time_since_epoch().count() != 0
 		&& now - manual_control_.last_command_time <= motion_settings_.manual_control_timeout;
@@ -228,6 +239,8 @@ void DroneTelemetrySimulator::update()
 			state_.vy = 0.0f;
 		}
 
+		// Local NED uses negative Z for upward motion, so the operator input is
+		// inverted before applying the requested climb or descent rate.
 		const float requested_vz = -manual_control_.z_input * motion_settings_.manual_vertical_velocity_mps;
 		const float previous_altitude = state_.altitude;
 		state_.altitude = std::min(state_.altitude + requested_vz * dt, 0.0f);

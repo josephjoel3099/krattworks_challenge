@@ -1,3 +1,10 @@
+/**
+ * @file gcs_mavlink_node.cpp
+ * @brief Ground-station MAVLink worker implementation.
+ *
+ * Synchronizes UI requests with UDP traffic, keeps a thread-safe telemetry
+ * snapshot, and requests geofence data lazily as it becomes available.
+ */
 #include <gcs_mavlink_node.h>
 
 #include <algorithm>
@@ -65,6 +72,8 @@ void GcsMavlinkNode::run()
 		}
 
 		const auto now = std::chrono::steady_clock::now();
+		// Request missing geofence vertices gradually to avoid spamming the drone
+		// with duplicate fetch traffic every poll cycle.
 		requestGeofenceIfNeeded(server, now);
 
 		const TeleopState teleop_state = getTeleopState();
@@ -396,6 +405,8 @@ void GcsMavlinkNode::sendOverrideGotoCommand(
 void GcsMavlinkNode::sendManualControl(UdpSocket& socket, const TeleopState& teleop_state) const
 {
 	mavlink_message_t msg;
+	// MAVLink MANUAL_CONTROL expects each axis in the range [-1000, 1000], so the
+	// dashboard velocity intent is normalized against the configured limits.
 	const float x_normalized = drone_config_.manual_horizontal_velocity_mps > 0.0f
 		? teleop_state.x_velocity_mps / drone_config_.manual_horizontal_velocity_mps
 		: 0.0f;

@@ -1,3 +1,10 @@
+/**
+ * @file drone_simulator.h
+ * @brief Thread-safe drone telemetry and motion simulator.
+ *
+ * Declares the state containers and public control surface used by the drone
+ * process to emulate a small MAVLink-enabled vehicle.
+ */
 #ifndef DRONE_SIMULATOR_H
 #define DRONE_SIMULATOR_H
 
@@ -9,7 +16,8 @@
 #include <mutex>
 
 /**
- * Tunable motion settings used by the drone simulator.
+ * @struct DroneMotionSettings
+ * @brief Tunable motion settings used by the drone simulator.
  */
 struct DroneMotionSettings {
 	float max_velocity_mps = 0.0f;
@@ -23,7 +31,8 @@ struct DroneMotionSettings {
 };
 
 /**
- * Mutable vehicle state tracked by the simulator.
+ * @struct DroneState
+ * @brief Mutable vehicle state tracked by the simulator.
  */
 struct DroneState {
 	float x = 0.0f;
@@ -38,7 +47,8 @@ struct DroneState {
 };
 
 /**
- * Latest manual control input received from the GCS.
+ * @struct ManualControlState
+ * @brief Latest manual control input received from the GCS.
  */
 struct ManualControlState {
 	bool active = false;
@@ -49,10 +59,18 @@ struct ManualControlState {
 };
 
 /**
- * Thread-safe telemetry simulator that emulates a small MAVLink-enabled drone.
+ * @class DroneTelemetrySimulator
+ * @brief Thread-safe telemetry simulator for a small MAVLink-enabled drone.
+ *
+ * Owns the mutable flight state, enforces geofence constraints, and provides
+ * the control hooks consumed by the drone networking node.
  */
 class DroneTelemetrySimulator final : public DroneTelemetryABC {
 public:
+	/**
+	 * @brief Builds the simulator from validated runtime configuration.
+	 * @param config Drone configuration loaded at startup.
+	 */
 	explicit DroneTelemetrySimulator(const DroneConfig& config);
 
 	float getX() const override;

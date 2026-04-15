@@ -1,3 +1,10 @@
+/**
+ * @file gcs_main.cpp
+ * @brief Entry point for the ground control station application.
+ *
+ * Validates configuration, starts the MAVLink worker, and continuously renders
+ * the dashboard until the operator exits or a shutdown signal is received.
+ */
 #include <app_config.h>
 #include <gcs_gui_host.h>
 #include <gcs_mavlink_node.h>
@@ -77,6 +84,8 @@ int main()
 
 	std::thread mavlink_thread([&mavlink_node] { mavlink_node.run(); });
 
+	// Keep rendering on the main thread while the worker thread handles all UDP
+	// communication and telemetry decoding.
 	while (running && !gui.should_close()) {
 		gui.begin_frame();
 		gui.render_dashboard(mavlink_node.makeDashboardState(), mavlink_node.makeDashboardActions());

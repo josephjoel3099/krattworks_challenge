@@ -1,3 +1,10 @@
+/**
+ * @file drone_telemtry_abc.h
+ * @brief Abstract drone telemetry and control contract.
+ *
+ * Defines the small interface shared by the drone simulator and the MAVLink
+ * transport layer so they can evolve independently.
+ */
 #ifndef DRONE_TELEMETRY_ABC_H
 #define DRONE_TELEMETRY_ABC_H
 
@@ -5,7 +12,8 @@
 #include <chrono>
 
 /**
- * Supported flight modes used by the simulator.
+ * @enum MAVMode
+ * @brief Supported flight modes used by the simulator.
  */
 enum class MAVMode {
     GUIDED_DISARMED = 0,
@@ -14,7 +22,8 @@ enum class MAVMode {
 };
 
 /**
- * Abstract telemetry and control interface exposed by a drone implementation.
+ * @class DroneTelemetryABC
+ * @brief Abstract telemetry and control interface exposed by a drone implementation.
  */
 class DroneTelemetryABC {
 public:

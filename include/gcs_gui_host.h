@@ -1,3 +1,10 @@
+/**
+ * @file gcs_gui_host.h
+ * @brief Thin GLFW and ImGui host for the ground control station UI.
+ *
+ * Encapsulates window lifecycle, frame setup, and dashboard presentation so
+ * the GCS main loop can stay focused on orchestration.
+ */
 #ifndef GCS_GUI_HOST_H
 #define GCS_GUI_HOST_H
 
@@ -13,6 +20,10 @@
 
 namespace gcs_ui {
 
+/**
+ * @class GuiHost
+ * @brief Owns the native window and ImGui backends for the GCS.
+ */
 class GuiHost {
 public:
 	GuiHost() = default;

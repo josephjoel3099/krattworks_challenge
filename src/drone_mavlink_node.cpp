@@ -1,3 +1,10 @@
+/**
+ * @file drone_mavlink_node.cpp
+ * @brief Drone-side MAVLink networking loop implementation.
+ *
+ * Sends periodic heartbeat and position updates while translating incoming GCS
+ * commands into simulator state changes.
+ */
 #include <drone_mavlink_node.h>
 
 #include <algorithm>
@@ -40,6 +47,8 @@ void DroneMavlinkNode::run()
 	const auto start = clock::now();
 	auto next_hb = start;
 	auto next_pos = start;
+	// Schedule heartbeat and position streams independently so a slower message
+	// rate in one channel never blocks the other.
 	const auto hb_interval = std::chrono::duration<double>(
 		1.0 / std::max(0.1, static_cast<double>(drone_config_.heartbeat_rate_hz)));
 	const auto pos_interval = std::chrono::duration<double>(
@@ -51,6 +60,8 @@ void DroneMavlinkNode::run()
 		const auto now = clock::now();
 
 		if (client.poll_read(std::max(1, drone_config_.poll_timeout_ms))) {
+			// A single UDP payload may contain multiple MAVLink frames, so parse the
+			// buffer byte-by-byte and dispatch each fully decoded message.
 			while (client.available() > 0) {
 				char buffer[1024];
 				IpAddress from;

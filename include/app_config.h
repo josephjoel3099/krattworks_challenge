@@ -1,3 +1,11 @@
+/**
+ * @file app_config.h
+ * @brief Shared configuration models and lightweight JSON loading helpers.
+ *
+ * Declares the runtime settings used by the drone simulator, the ground
+ * control station, and the GUI host. The inline helpers keep startup
+ * configuration self-contained and easy to reuse from both applications.
+ */
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
@@ -14,7 +22,8 @@
 #include <vector>
 
 /**
- * Network settings shared by the drone and the GCS.
+ * @struct SharedConfig
+ * @brief Network settings shared by the drone and the GCS.
  */
 struct SharedConfig {
 	std::string host;
@@ -23,7 +32,8 @@ struct SharedConfig {
 };
 
 /**
- * Runtime configuration for the ground control station.
+ * @struct GcsConfig
+ * @brief Runtime configuration for the ground control station.
  */
 struct GcsConfig {
 	int poll_timeout_ms = 100;
@@ -34,7 +44,8 @@ struct GcsConfig {
 };
 
 /**
- * Window and rendering settings for the GCS UI.
+ * @struct GuiConfig
+ * @brief Window and rendering settings for the GCS UI.
  */
 struct GuiConfig {
 	std::string window_title = "GCS";
@@ -46,7 +57,8 @@ struct GuiConfig {
 };
 
 /**
- * Simple 2D point expressed in local meters.
+ * @struct XYPoint
+ * @brief Simple 2D point expressed in local meters.
  */
 struct XYPoint {
 	float x = 0.0f;
@@ -54,7 +66,8 @@ struct XYPoint {
 };
 
 /**
- * User-configurable drone simulation settings.
+ * @struct DroneConfig
+ * @brief User-configurable drone simulation settings.
  */
 struct DroneConfig {
 	float max_velocity_mps = 0.0f;
@@ -76,6 +89,10 @@ struct DroneConfig {
 	std::array<XYPoint, 4> geofence_corners_m{};
 };
 
+/**
+ * @namespace app_config
+ * @brief Helpers for loading and validating application runtime configuration.
+ */
 namespace app_config {
 
 inline std::array<XYPoint, 4> sort_geofence_corners(std::array<XYPoint, 4> corners)

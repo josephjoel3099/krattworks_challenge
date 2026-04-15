@@ -1,3 +1,10 @@
+/**
+ * @file gcs_dashboard.h
+ * @brief Immediate-mode dashboard rendering for the ground control station.
+ *
+ * Keeps the UI helpers header-only so the main application can render a rich
+ * telemetry panel without additional linking complexity.
+ */
 #ifndef GCS_DASHBOARD_H
 #define GCS_DASHBOARD_H
 
@@ -319,6 +326,11 @@ inline void draw_altitude_plot(const TelemetrySnapshot& telemetry, int stale_tim
 
 } // namespace detail
 
+/**
+ * @brief Renders the full ground control dashboard for the current frame.
+ * @param state Immutable telemetry and application state for the frame.
+ * @param actions Callback bundle invoked when the user clicks controls.
+ */
 inline void render_dashboard(const DashboardState& state, const DashboardActions& actions)
 {
 	static float goto_x = 0.0f;

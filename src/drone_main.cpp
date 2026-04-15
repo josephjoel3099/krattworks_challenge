@@ -1,3 +1,10 @@
+/**
+ * @file drone_main.cpp
+ * @brief Entry point for the simulated drone process.
+ *
+ * Loads validated runtime configuration, starts the physics simulator, and
+ * serves the drone-side MAVLink loop until shutdown is requested.
+ */
 #include <app_config.h>
 #include <drone_mavlink_node.h>
 #include <drone_simulator.h>
@@ -78,6 +85,8 @@ void log_loaded_config(const DroneConfig& config)
 
 void simulation_worker(DroneTelemetrySimulator& telemetry, const DroneConfig& config)
 {
+	// Keep the motion model on its own cadence so networking hiccups do not
+	// directly affect the simulated vehicle dynamics.
 	const double update_rate_hz = std::max(1.0, static_cast<double>(config.update_rate_hz));
 	const auto update_interval = std::chrono::duration<double>(1.0 / update_rate_hz);
 
@@ -103,6 +112,8 @@ int main()
 
 	DroneMavlinkNode mavlink_node(*context.telemetry, context.shared_config, context.drone_config, g_running);
 
+	// Run the simulator and MAVLink transport in parallel so telemetry updates
+	// remain responsive while UDP traffic is being processed.
 	std::thread sim_thread([&context] {
 		simulation_worker(*context.telemetry, context.drone_config);
 	});
