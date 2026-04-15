@@ -26,15 +26,14 @@ GcsMavlinkNode::GcsMavlinkNode(
 void GcsMavlinkNode::run()
 {
 	UdpSocket server;
-	if (!server.create(shared_config_.gcs_port, false)) {
-		std::fprintf(stderr, "GCS: failed to bind UDP server on port %u\n", shared_config_.gcs_port);
+	if (!server.create(shared_config_.gcs_port, true)) {
+		std::fprintf(stderr, "GCS: failed to create UDP server on port %u\n", shared_config_.gcs_port);
 		running_ = false;
 		return;
 	}
 
-	std::printf("GCS: listening on %s:%u\n", shared_config_.host.c_str(), shared_config_.gcs_port);
+	std::printf("GCS: listening on port %u\n", shared_config_.gcs_port);
 
-	uint8_t rx_buf[2048];
 	mavlink_status_t parse_status{};
 	auto last_manual_control_time = std::chrono::steady_clock::time_point{};
 	const auto manual_control_interval = std::chrono::milliseconds(gcs_config_.manual_control_interval_ms);
@@ -65,15 +64,16 @@ void GcsMavlinkNode::run()
 		}
 
 		while (server.available() > 0) {
+			char buffer[1024];
 			IpAddress from;
-			const int bytes = server.recvfrom(rx_buf, sizeof(rx_buf), from);
+			const int bytes = server.recvfrom(buffer, sizeof(buffer), from);
 			if (bytes <= 0) {
 				continue;
 			}
 
 			for (int i = 0; i < bytes; ++i) {
 				mavlink_message_t msg;
-				if (mavlink_parse_char(MAVLINK_COMM_0, rx_buf[i], &msg, &parse_status)) {
+				if (mavlink_parse_char(MAVLINK_COMM_0, static_cast<uint8_t>(buffer[i]), &msg, &parse_status)) {
 					handleMavlinkMessage(msg);
 				}
 			}
