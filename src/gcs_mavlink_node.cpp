@@ -6,6 +6,23 @@
 #include <cstdio>
 #include <limits>
 
+namespace {
+
+void resetTrackedTelemetry(gcs_ui::TelemetrySnapshot& telemetry)
+{
+	telemetry.time_boot_ms = 0;
+	telemetry.x = 0.0f;
+	telemetry.y = 0.0f;
+	telemetry.z = 0.0f;
+	telemetry.vx = 0.0f;
+	telemetry.vy = 0.0f;
+	telemetry.vz = 0.0f;
+	telemetry.has_position = false;
+	telemetry.altitude_history.clear();
+}
+
+} // namespace
+
 GcsMavlinkNode::GcsMavlinkNode(
 	const SharedConfig& shared_config,
 	const GcsConfig& gcs_config,
@@ -185,6 +202,12 @@ void GcsMavlinkNode::updateHeartbeat(const mavlink_message_t& msg)
 	mavlink_msg_heartbeat_decode(&msg, &heartbeat);
 
 	std::lock_guard<std::mutex> lock(telemetry_mutex_);
+	const bool source_changed = telemetry_.has_heartbeat
+		&& (telemetry_.system_id != msg.sysid || telemetry_.component_id != msg.compid);
+	if (source_changed) {
+		resetTrackedTelemetry(telemetry_);
+	}
+
 	telemetry_.system_id = msg.sysid;
 	telemetry_.component_id = msg.compid;
 	telemetry_.vehicle_type = heartbeat.type;
@@ -201,6 +224,11 @@ void GcsMavlinkNode::updateLocalPosition(const mavlink_message_t& msg)
 	mavlink_msg_local_position_ned_decode(&msg, &position);
 
 	std::lock_guard<std::mutex> lock(telemetry_mutex_);
+	const bool boot_time_restarted = telemetry_.has_position && position.time_boot_ms < telemetry_.time_boot_ms;
+	if (boot_time_restarted) {
+		resetTrackedTelemetry(telemetry_);
+	}
+
 	telemetry_.time_boot_ms = position.time_boot_ms;
 	telemetry_.x = position.x;
 	telemetry_.y = position.y;

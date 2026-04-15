@@ -205,7 +205,7 @@ inline void draw_position_plot(const TelemetrySnapshot& telemetry, float request
 	ImGui::InvisibleButton("position_plot", canvas_size);
 }
 
-inline void draw_altitude_plot(const TelemetrySnapshot& telemetry, float requested_height = 260.0f)
+inline void draw_altitude_plot(const TelemetrySnapshot& telemetry, int stale_timeout_ms, float requested_height = 260.0f)
 {
 	ImGui::Spacing();
 	ImGui::TextUnformatted("Altitude Over Time");
@@ -236,7 +236,7 @@ inline void draw_altitude_plot(const TelemetrySnapshot& telemetry, float request
 		draw_list->AddLine(ImVec2(canvas_pos.x, y), ImVec2(canvas_end.x, y), grid_color, 1.0f);
 	}
 
-	if (telemetry.altitude_history.empty()) {
+	if (telemetry.altitude_history.empty() || !has_recent_data(telemetry, stale_timeout_ms)) {
 		draw_list->AddText(
 			ImVec2(canvas_pos.x + 12.0f, canvas_pos.y + 12.0f),
 			IM_COL32(210, 216, 230, 255),
@@ -556,7 +556,7 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 	const float altitude_plot_height = preferred_altitude_height * plot_scale;
 
 	detail::draw_position_plot(state.telemetry, position_plot_height);
-	detail::draw_altitude_plot(state.telemetry, altitude_plot_height);
+	detail::draw_altitude_plot(state.telemetry, state.telemetry_stale_timeout_ms, altitude_plot_height);
 
 	ImGui::End();
 }
