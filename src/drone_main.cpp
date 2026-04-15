@@ -53,10 +53,12 @@ void log_loaded_config(const DroneConfig& config)
 {
 	if (const auto cfg_path = app_config::find_config_path("drone_config.json"); cfg_path.has_value()) {
 		std::printf(
-			"Drone: loaded config from %s (climb_rate_mps=%.2f, land_rate_mps=%.2f, arm_target_altitude_m=%.2f)\n",
+			"Drone: loaded config from %s (climb_rate_mps=%.2f, land_rate_mps=%.2f, manual_horizontal_velocity_mps=%.2f, manual_vertical_velocity_mps=%.2f, arm_target_altitude_m=%.2f)\n",
 			cfg_path->string().c_str(),
 			config.climb_rate_mps,
 			config.land_rate_mps,
+			config.manual_horizontal_velocity_mps,
+			config.manual_vertical_velocity_mps,
 			config.arm_target_altitude_m);
 		for (size_t i = 0; i < config.geofence_corners_m.size(); ++i) {
 			const auto& corner = config.geofence_corners_m[i];
@@ -66,9 +68,11 @@ void log_loaded_config(const DroneConfig& config)
 	}
 
 	std::printf(
-		"Drone: drone_config.json not found; using defaults (climb_rate_mps=%.2f, land_rate_mps=%.2f, arm_target_altitude_m=%.2f)\n",
+		"Drone: drone_config.json not found; using defaults (climb_rate_mps=%.2f, land_rate_mps=%.2f, manual_horizontal_velocity_mps=%.2f, manual_vertical_velocity_mps=%.2f, arm_target_altitude_m=%.2f)\n",
 		config.climb_rate_mps,
 		config.land_rate_mps,
+		config.manual_horizontal_velocity_mps,
+		config.manual_vertical_velocity_mps,
 		config.arm_target_altitude_m);
 }
 

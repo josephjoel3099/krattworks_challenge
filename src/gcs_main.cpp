@@ -42,9 +42,9 @@ struct PendingCommand {
 
 struct TeleopState {
 	bool enabled = false;
-	float x_axis = 0.0f;
-	float y_axis = 0.0f;
-	float z_axis = 0.0f;
+	float x_velocity_mps = 0.0f;
+	float y_velocity_mps = 0.0f;
+	float z_velocity_mps = 0.0f;
 };
 
 IpAddress g_drone_addr{};
@@ -125,9 +125,9 @@ void set_teleop_enabled(bool enabled)
 	std::lock_guard<std::mutex> lock(g_teleop_mutex);
 	g_teleop_state.enabled = enabled;
 	if (!enabled) {
-		g_teleop_state.x_axis = 0.0f;
-		g_teleop_state.y_axis = 0.0f;
-		g_teleop_state.z_axis = 0.0f;
+		g_teleop_state.x_velocity_mps = 0.0f;
+		g_teleop_state.y_velocity_mps = 0.0f;
+		g_teleop_state.z_velocity_mps = 0.0f;
 	}
 }
 
@@ -135,15 +135,24 @@ void update_teleop_axes(float x_axis, float y_axis, float z_axis)
 {
 	std::lock_guard<std::mutex> lock(g_teleop_mutex);
 	if (!g_teleop_state.enabled) {
-		g_teleop_state.x_axis = 0.0f;
-		g_teleop_state.y_axis = 0.0f;
-		g_teleop_state.z_axis = 0.0f;
+		g_teleop_state.x_velocity_mps = 0.0f;
+		g_teleop_state.y_velocity_mps = 0.0f;
+		g_teleop_state.z_velocity_mps = 0.0f;
 		return;
 	}
 
-	g_teleop_state.x_axis = std::clamp(x_axis, -1.0f, 1.0f);
-	g_teleop_state.y_axis = std::clamp(y_axis, -1.0f, 1.0f);
-	g_teleop_state.z_axis = std::clamp(z_axis, -1.0f, 1.0f);
+	g_teleop_state.x_velocity_mps = std::clamp(
+		x_axis,
+		-g_drone_config.manual_horizontal_velocity_mps,
+		g_drone_config.manual_horizontal_velocity_mps);
+	g_teleop_state.y_velocity_mps = std::clamp(
+		y_axis,
+		-g_drone_config.manual_horizontal_velocity_mps,
+		g_drone_config.manual_horizontal_velocity_mps);
+	g_teleop_state.z_velocity_mps = std::clamp(
+		z_axis,
+		-g_drone_config.manual_vertical_velocity_mps,
+		g_drone_config.manual_vertical_velocity_mps);
 }
 
 TeleopState get_teleop_state()
@@ -349,9 +358,18 @@ void send_geofence_fetch_request(UdpSocket& socket, uint8_t point_index)
 void send_manual_control(UdpSocket& socket, const TeleopState& teleop_state)
 {
 	mavlink_message_t msg;
-	const int16_t x = static_cast<int16_t>(std::lround(std::clamp(teleop_state.x_axis, -1.0f, 1.0f) * 1000.0f));
-	const int16_t y = static_cast<int16_t>(std::lround(std::clamp(teleop_state.y_axis, -1.0f, 1.0f) * 1000.0f));
-	const int16_t z = static_cast<int16_t>(std::lround(std::clamp(teleop_state.z_axis, -1.0f, 1.0f) * 1000.0f));
+	const float x_normalized = g_drone_config.manual_horizontal_velocity_mps > 0.0f
+		? teleop_state.x_velocity_mps / g_drone_config.manual_horizontal_velocity_mps
+		: 0.0f;
+	const float y_normalized = g_drone_config.manual_horizontal_velocity_mps > 0.0f
+		? teleop_state.y_velocity_mps / g_drone_config.manual_horizontal_velocity_mps
+		: 0.0f;
+	const float z_normalized = g_drone_config.manual_vertical_velocity_mps > 0.0f
+		? teleop_state.z_velocity_mps / g_drone_config.manual_vertical_velocity_mps
+		: 0.0f;
+	const int16_t x = static_cast<int16_t>(std::lround(std::clamp(x_normalized, -1.0f, 1.0f) * 1000.0f));
+	const int16_t y = static_cast<int16_t>(std::lround(std::clamp(y_normalized, -1.0f, 1.0f) * 1000.0f));
+	const int16_t z = static_cast<int16_t>(std::lround(std::clamp(z_normalized, -1.0f, 1.0f) * 1000.0f));
 	mavlink_msg_manual_control_pack(
 		gcs_system_id(),
 		gcs_component_id(),
@@ -467,6 +485,8 @@ DashboardState make_dashboard_state()
 	state.gcs_port = g_gcs_config.gcs_port;
 	state.drone_port = g_gcs_config.drone_port;
 	state.arm_target_altitude_m = g_drone_config.arm_target_altitude_m;
+	state.manual_horizontal_velocity_mps = g_drone_config.manual_horizontal_velocity_mps;
+	state.manual_vertical_velocity_mps = g_drone_config.manual_vertical_velocity_mps;
 	state.is_running = g_running.load();
 	state.teleop_enabled = get_teleop_state().enabled;
 	state.telemetry = get_telemetry_snapshot();

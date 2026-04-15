@@ -50,6 +50,8 @@ struct DashboardState {
 	uint16_t gcs_port = 0;
 	uint16_t drone_port = 0;
 	float arm_target_altitude_m = 0.0f;
+	float manual_horizontal_velocity_mps = 0.0f;
+	float manual_vertical_velocity_mps = 0.0f;
 	bool is_running = false;
 	bool teleop_enabled = false;
 	TelemetrySnapshot telemetry;

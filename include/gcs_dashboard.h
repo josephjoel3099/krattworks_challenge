@@ -419,27 +419,40 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 		actions.on_set_teleop_enabled(false);
 	}
 
-	float teleop_x_axis = 0.0f;
-	float teleop_y_axis = 0.0f;
-	float teleop_z_axis = 0.0f;
+	float teleop_x_velocity_mps = 0.0f;
+	float teleop_y_velocity_mps = 0.0f;
+	float teleop_z_velocity_mps = 0.0f;
 	if (teleop_enabled) {
-		teleop_x_axis += ImGui::IsKeyDown(ImGuiKey_D) ? 1.0f : 0.0f;
-		teleop_x_axis -= ImGui::IsKeyDown(ImGuiKey_A) ? 1.0f : 0.0f;
-		teleop_y_axis += ImGui::IsKeyDown(ImGuiKey_W) ? 1.0f : 0.0f;
-		teleop_y_axis -= ImGui::IsKeyDown(ImGuiKey_S) ? 1.0f : 0.0f;
-		teleop_z_axis += ImGui::IsKeyDown(ImGuiKey_Q) ? 1.0f : 0.0f;
-		teleop_z_axis -= ImGui::IsKeyDown(ImGuiKey_E) ? 1.0f : 0.0f;
+		teleop_x_velocity_mps += ImGui::IsKeyDown(ImGuiKey_D) ? state.manual_horizontal_velocity_mps : 0.0f;
+		teleop_x_velocity_mps -= ImGui::IsKeyDown(ImGuiKey_A) ? state.manual_horizontal_velocity_mps : 0.0f;
+		teleop_y_velocity_mps += ImGui::IsKeyDown(ImGuiKey_W) ? state.manual_horizontal_velocity_mps : 0.0f;
+		teleop_y_velocity_mps -= ImGui::IsKeyDown(ImGuiKey_S) ? state.manual_horizontal_velocity_mps : 0.0f;
+		teleop_z_velocity_mps += ImGui::IsKeyDown(ImGuiKey_Q) ? state.manual_vertical_velocity_mps : 0.0f;
+		teleop_z_velocity_mps -= ImGui::IsKeyDown(ImGuiKey_E) ? state.manual_vertical_velocity_mps : 0.0f;
 	}
 	if (actions.on_update_teleop_axes) {
-		actions.on_update_teleop_axes(teleop_x_axis, teleop_y_axis, teleop_z_axis);
+		actions.on_update_teleop_axes(teleop_x_velocity_mps, teleop_y_velocity_mps, teleop_z_velocity_mps);
 	}
 
 	const ImVec4 teleop_color = teleop_enabled
 		? ImVec4(0.45f, 0.85f, 0.60f, 1.0f)
 		: ImVec4(0.95f, 0.45f, 0.35f, 1.0f);
-	const char* teleop_status = teleop_enabled
-		? "Teleop enabled: W/A/S/D move in XY, Q/E move altitude"
-		: (teleop_allowed ? "Teleop disabled" : "Teleop unavailable until drone is armed and telemetry is live");
+	char teleop_status_buffer[192];
+	if (teleop_enabled) {
+		std::snprintf(
+			teleop_status_buffer,
+			sizeof(teleop_status_buffer),
+			"Teleop enabled: XY max %.1f m/s, Z max %.1f m/s",
+			state.manual_horizontal_velocity_mps,
+			state.manual_vertical_velocity_mps);
+	} else {
+		std::snprintf(
+			teleop_status_buffer,
+			sizeof(teleop_status_buffer),
+			"%s",
+			teleop_allowed ? "Teleop disabled" : "Teleop unavailable until drone is armed and telemetry is live");
+	}
+	const char* teleop_status = teleop_status_buffer;
 	const bool geofence_ready = detail::has_complete_geofence(state.telemetry.geofence);
 	const bool goto_inside_geofence = detail::is_point_inside_geofence(state.telemetry.geofence, goto_x, goto_y);
 	const bool goto_altitude_valid = goto_altitude_m >= 0.0f;
@@ -521,9 +534,11 @@ inline void render_dashboard(const DashboardState& state, const DashboardActions
 	ImGui::EndDisabled();
 	ImGui::TextColored(teleop_color, "%s", teleop_status);
 	ImGui::TextUnformatted("Keys: W/A/S/D = XY, Q/E = Alt");
-	ImGui::Text("X Axis: %.0f", teleop_x_axis);
-	ImGui::Text("Y Axis: %.0f", teleop_y_axis);
-	ImGui::Text("Z Axis: %.0f", teleop_z_axis);
+	ImGui::Text("Configured XY speed: %.2f m/s", state.manual_horizontal_velocity_mps);
+	ImGui::Text("Configured Z speed: %.2f m/s", state.manual_vertical_velocity_mps);
+	ImGui::Text("X Command: %.2f m/s", teleop_x_velocity_mps);
+	ImGui::Text("Y Command: %.2f m/s", teleop_y_velocity_mps);
+	ImGui::Text("Z Command: %.2f m/s", teleop_z_velocity_mps);
 	ImGui::NextColumn();
 	ImGui::Columns(1);
 

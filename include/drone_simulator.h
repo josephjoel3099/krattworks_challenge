@@ -13,7 +13,9 @@
  */
 struct DroneMotionSettings {
 	float max_velocity_mps = 0.0f;
+	float manual_horizontal_velocity_mps = 0.0f;
 	float climb_rate_mps = 0.0f;
+	float manual_vertical_velocity_mps = 0.0f;
 	float land_rate_mps = 0.0f;
 	float arm_target_altitude_m = 0.0f;
 	float horizontal_arrival_tolerance_m = 0.75f;

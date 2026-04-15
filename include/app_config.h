@@ -44,10 +44,12 @@ struct DroneConfig {
 	uint16_t drone_port = 0;
 	uint16_t gcs_port = 0;
 	float max_velocity_mps = 0.0f;
+	float manual_horizontal_velocity_mps = 0.0f;
 	float update_rate_hz = 0.0f;
 	float heartbeat_rate_hz = 0.0f;
 	float position_rate_hz = 0.0f;
 	float climb_rate_mps = 0.0f;
+	float manual_vertical_velocity_mps = 0.0f;
 	float land_rate_mps = 0.0f;
 	float arm_target_altitude_m = 0.0f;
 	float horizontal_arrival_tolerance_m = 0.75f;
@@ -278,10 +280,12 @@ inline DroneConfig load_drone_config()
 	set_if_present_from_json_number(*json, "drone_port", cfg.drone_port);
 	set_if_present_from_json_number(*json, "gcs_port", cfg.gcs_port);
 	set_if_present_from_json_number(*json, "max_velocity_mps", cfg.max_velocity_mps);
+	set_if_present_from_json_number(*json, "manual_horizontal_velocity_mps", cfg.manual_horizontal_velocity_mps);
 	set_if_present_from_json_number(*json, "update_rate_hz", cfg.update_rate_hz);
 	set_if_present_from_json_number(*json, "heartbeat_rate_hz", cfg.heartbeat_rate_hz);
 	set_if_present_from_json_number(*json, "position_rate_hz", cfg.position_rate_hz);
 	set_if_present_from_json_number(*json, "climb_rate_mps", cfg.climb_rate_mps);
+	set_if_present_from_json_number(*json, "manual_vertical_velocity_mps", cfg.manual_vertical_velocity_mps);
 	set_if_present_from_json_number(*json, "land_rate_mps", cfg.land_rate_mps);
 	set_if_present_from_json_number(*json, "arm_target_altitude_m", cfg.arm_target_altitude_m);
 	set_if_present_from_json_number(*json, "horizontal_arrival_tolerance_m", cfg.horizontal_arrival_tolerance_m);
@@ -293,6 +297,13 @@ inline DroneConfig load_drone_config()
 	set_if_present_from_json_number(*json, "gcs_component_id", cfg.gcs_component_id);
 	if (const auto geofence_corners = get_json_xy_points(*json, "geofence_corners_m"); geofence_corners.has_value()) {
 		cfg.geofence_corners_m = *geofence_corners;
+	}
+
+	if (cfg.manual_horizontal_velocity_mps <= 0.0f) {
+		cfg.manual_horizontal_velocity_mps = cfg.max_velocity_mps;
+	}
+	if (cfg.manual_vertical_velocity_mps <= 0.0f) {
+		cfg.manual_vertical_velocity_mps = cfg.climb_rate_mps;
 	}
 	return cfg;
 }
@@ -312,10 +323,12 @@ inline bool is_valid(const DroneConfig& cfg)
 	return cfg.drone_port != 0
 		&& cfg.gcs_port != 0
 		&& cfg.max_velocity_mps > 0.0f
+		&& cfg.manual_horizontal_velocity_mps > 0.0f
 		&& cfg.update_rate_hz > 0.0f
 		&& cfg.heartbeat_rate_hz > 0.0f
 		&& cfg.position_rate_hz > 0.0f
 		&& cfg.climb_rate_mps > 0.0f
+		&& cfg.manual_vertical_velocity_mps > 0.0f
 		&& cfg.land_rate_mps > 0.0f
 		&& cfg.arm_target_altitude_m > 0.0f
 		&& cfg.horizontal_arrival_tolerance_m > 0.0f

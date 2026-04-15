@@ -7,7 +7,9 @@
 DroneTelemetrySimulator::DroneTelemetrySimulator(const DroneConfig& config)
 	: motion_settings_{
 		config.max_velocity_mps,
+		config.manual_horizontal_velocity_mps,
 		config.climb_rate_mps,
+		config.manual_vertical_velocity_mps,
 		config.land_rate_mps,
 		config.arm_target_altitude_m,
 		config.horizontal_arrival_tolerance_m,
@@ -212,8 +214,8 @@ void DroneTelemetrySimulator::update()
 	}
 
 	if (state_.mode == MAVMode::GUIDED_ARMED && manual_control_active) {
-		const float requested_vx = manual_control_.x_input * motion_settings_.max_velocity_mps;
-		const float requested_vy = manual_control_.y_input * motion_settings_.max_velocity_mps;
+		const float requested_vx = manual_control_.x_input * motion_settings_.manual_horizontal_velocity_mps;
+		const float requested_vy = manual_control_.y_input * motion_settings_.manual_horizontal_velocity_mps;
 		const float next_x = state_.x + requested_vx * dt;
 		const float next_y = state_.y + requested_vy * dt;
 		if (app_config::is_point_inside_polygon(XYPoint{next_x, next_y}, geofence_corners_)) {
@@ -226,7 +228,7 @@ void DroneTelemetrySimulator::update()
 			state_.vy = 0.0f;
 		}
 
-		const float requested_vz = -manual_control_.z_input * motion_settings_.climb_rate_mps;
+		const float requested_vz = -manual_control_.z_input * motion_settings_.manual_vertical_velocity_mps;
 		const float previous_altitude = state_.altitude;
 		state_.altitude = std::min(state_.altitude + requested_vz * dt, 0.0f);
 		state_.vz = (state_.altitude - previous_altitude) / dt;
