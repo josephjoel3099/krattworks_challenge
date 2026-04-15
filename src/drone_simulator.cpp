@@ -11,6 +11,23 @@
 #include <cmath>
 #include <cstdio>
 
+namespace {
+
+const char* mode_to_string(MAVMode mode)
+{
+	switch (mode) {
+	case MAVMode::GUIDED_ARMED:
+		return "ARMED";
+	case MAVMode::LAND:
+		return "LAND";
+	case MAVMode::GUIDED_DISARMED:
+	default:
+		return "DISARM";
+	}
+}
+
+} // namespace
+
 DroneTelemetrySimulator::DroneTelemetrySimulator(const DroneConfig& config)
 	: motion_settings_{
 		config.max_velocity_mps,
@@ -179,28 +196,26 @@ void DroneTelemetrySimulator::stopTelemetryStream()
 
 void DroneTelemetrySimulator::sendHeartbeat()
 {
-	std::lock_guard<std::mutex> lock(state_mutex_);
-	static bool hb_tick = false;
-	hb_tick = !hb_tick;
-	std::printf("\rHEARTBEAT: [%c] System armed=%s   ",
-		hb_tick ? '*' : ' ',
-		state_.mode == MAVMode::GUIDED_DISARMED ? "false" : "true");
-	std::fflush(stdout);
+	// Heartbeats are still sent by the MAVLink node, but the console now shows
+	// the simulator state in a human-readable format via sendLocalPositionNED().
 }
 
 void DroneTelemetrySimulator::sendLocalPositionNED()
 {
 	std::lock_guard<std::mutex> lock(state_mutex_);
-	static bool pos_tick = false;
-	pos_tick = !pos_tick;
-	std::printf("\rLOCAL_POSITION_NED: [%c] X=%.2f Y=%.2f Z=%.2f VX=%.2f VY=%.2f VZ=%.2f   ",
-		pos_tick ? '*' : ' ',
+	static bool tick = false;
+	tick = !tick;
+	std::printf(
+		"\r\033[KSIM_TELE: Heartbeat[%c] Mode: %s Armed?:%s Pose: (%.1f %.1f %.1f) Vel: (%.1f %.1f %.1f)   ",
+		tick ? '*' : ' ',
+		mode_to_string(state_.mode),
+		state_.mode == MAVMode::GUIDED_DISARMED ? "No" : "Yes",
 		state_.x,
 		state_.y,
-		state_.altitude,
+		-state_.altitude,
 		state_.vx,
 		state_.vy,
-		state_.vz);
+		-state_.vz);
 	std::fflush(stdout);
 }
 
