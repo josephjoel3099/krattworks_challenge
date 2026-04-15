@@ -7,3 +7,10 @@
 [submodule "libs/mavlink"]
 	path = libs/mavlink
 	url = https://github.com/mavlink/c_library_v2.git
+[submodule "googletest"]
+	path = libs/googletest
+	url = https://github.com/google/googletest.git
+[submodule "SimpleUDP"]
+	path = libs/SimpleUDP
+	url = (https://github.com/RedFox20/SimpleUDP.git)
+
