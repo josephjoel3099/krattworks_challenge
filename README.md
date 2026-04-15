@@ -74,7 +74,7 @@ ctest
 ## GCS Panel
 
 <p align="center">
-<img src="docs/GCS_gui.gif" width="600"/>
+<img src="docs/GCS_gui.gif" width="900"/>
 </p>
 
 ## License
