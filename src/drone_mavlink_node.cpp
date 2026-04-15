@@ -24,16 +24,16 @@ DroneMavlinkNode::DroneMavlinkNode(
 void DroneMavlinkNode::run()
 {
 	UdpSocket client;
-	if (!client.create(drone_config_.drone_port, true)) {
-		std::fprintf(stderr, "Drone: failed to create UDP client on port %u\n", drone_config_.drone_port);
+	if (!client.create(shared_config_.drone_port, true)) {
+		std::fprintf(stderr, "Drone: failed to create UDP client on port %u\n", shared_config_.drone_port);
 		return;
 	}
 
-	const IpAddress gcs_addr{shared_config_.host.c_str(), drone_config_.gcs_port};
+	const IpAddress gcs_addr{shared_config_.host.c_str(), shared_config_.gcs_port};
 	std::printf(
 		"Drone: UDP client created on %s:%u, sending to %s\n",
 		shared_config_.host.c_str(),
-		drone_config_.drone_port,
+		shared_config_.drone_port,
 		gcs_addr.to_string().c_str());
 
 	using clock = std::chrono::steady_clock; // sim clock

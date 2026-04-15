@@ -18,14 +18,14 @@
  */
 struct SharedConfig {
 	std::string host;
+	uint16_t gcs_port = 0;
+	uint16_t drone_port = 0;
 };
 
 /**
  * Runtime configuration for the ground control station.
  */
 struct GcsConfig {
-	uint16_t gcs_port = 0;
-	uint16_t drone_port = 0;
 	int poll_timeout_ms = 0;
 };
 
@@ -38,11 +38,9 @@ struct XYPoint {
 };
 
 /**
- * User-configurable drone simulation and communication settings.
+ * User-configurable drone simulation settings.
  */
 struct DroneConfig {
-	uint16_t drone_port = 0;
-	uint16_t gcs_port = 0;
 	float max_velocity_mps = 0.0f;
 	float manual_horizontal_velocity_mps = 0.0f;
 	float update_rate_hz = 0.0f;
@@ -243,13 +241,32 @@ inline SharedConfig load_shared_config()
 {
 	SharedConfig cfg;
 	const auto json = read_config_text("shared_config.json");
-	if (!json.has_value()) {
-		return cfg;
+	if (json.has_value()) {
+		const auto host = get_json_string(*json, "host");
+		if (host.has_value() && !host->empty()) {
+			cfg.host = *host;
+		}
+		set_if_present_from_json_number(*json, "gcs_port", cfg.gcs_port);
+		set_if_present_from_json_number(*json, "drone_port", cfg.drone_port);
 	}
 
-	const auto host = get_json_string(*json, "host");
-	if (host.has_value() && !host->empty()) {
-		cfg.host = *host;
+	if (cfg.gcs_port == 0 || cfg.drone_port == 0) {
+		if (const auto gcs_json = read_config_text("gcs_config.json"); gcs_json.has_value()) {
+			if (cfg.gcs_port == 0) {
+				set_if_present_from_json_number(*gcs_json, "gcs_port", cfg.gcs_port);
+			}
+			if (cfg.drone_port == 0) {
+				set_if_present_from_json_number(*gcs_json, "drone_port", cfg.drone_port);
+			}
+		}
+		if (const auto drone_json = read_config_text("drone_config.json"); drone_json.has_value()) {
+			if (cfg.drone_port == 0) {
+				set_if_present_from_json_number(*drone_json, "drone_port", cfg.drone_port);
+			}
+			if (cfg.gcs_port == 0) {
+				set_if_present_from_json_number(*drone_json, "gcs_port", cfg.gcs_port);
+			}
+		}
 	}
 
 	return cfg;
@@ -263,8 +280,6 @@ inline GcsConfig load_gcs_config()
 		return cfg;
 	}
 
-	set_if_present_from_json_number(*json, "gcs_port", cfg.gcs_port);
-	set_if_present_from_json_number(*json, "drone_port", cfg.drone_port);
 	set_if_present_from_json_number(*json, "poll_timeout_ms", cfg.poll_timeout_ms);
 	return cfg;
 }
@@ -277,8 +292,6 @@ inline DroneConfig load_drone_config()
 		return cfg;
 	}
 
-	set_if_present_from_json_number(*json, "drone_port", cfg.drone_port);
-	set_if_present_from_json_number(*json, "gcs_port", cfg.gcs_port);
 	set_if_present_from_json_number(*json, "max_velocity_mps", cfg.max_velocity_mps);
 	set_if_present_from_json_number(*json, "manual_horizontal_velocity_mps", cfg.manual_horizontal_velocity_mps);
 	set_if_present_from_json_number(*json, "update_rate_hz", cfg.update_rate_hz);
@@ -310,19 +323,17 @@ inline DroneConfig load_drone_config()
 
 inline bool is_valid(const SharedConfig& cfg)
 {
-	return !cfg.host.empty();
+	return !cfg.host.empty() && cfg.gcs_port != 0 && cfg.drone_port != 0;
 }
 
 inline bool is_valid(const GcsConfig& cfg)
 {
-	return cfg.gcs_port != 0 && cfg.drone_port != 0 && cfg.poll_timeout_ms > 0;
+	return cfg.poll_timeout_ms > 0;
 }
 
 inline bool is_valid(const DroneConfig& cfg)
 {
-	return cfg.drone_port != 0
-		&& cfg.gcs_port != 0
-		&& cfg.max_velocity_mps > 0.0f
+	return cfg.max_velocity_mps > 0.0f
 		&& cfg.manual_horizontal_velocity_mps > 0.0f
 		&& cfg.update_rate_hz > 0.0f
 		&& cfg.heartbeat_rate_hz > 0.0f

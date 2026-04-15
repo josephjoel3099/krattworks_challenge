@@ -1,5 +1,3 @@
 {
-	"gcs_port": 14550,
-	"drone_port": 14551,
 	"poll_timeout_ms": 100
 }

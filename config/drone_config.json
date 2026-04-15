@@ -1,6 +1,4 @@
 {
-	"drone_port": 14551,
-	"gcs_port": 14550,
 	"max_velocity_mps": 10.0,
 	"manual_horizontal_velocity_mps": 5.0,
 	"update_rate_hz": 100.0,

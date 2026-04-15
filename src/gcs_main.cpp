@@ -416,13 +416,13 @@ void request_geofence_if_needed(UdpSocket& socket)
 void mavlink_worker()
 {
 	UdpSocket server;
-	if (!server.create(g_gcs_config.gcs_port, false)) {
-		std::fprintf(stderr, "GCS: failed to bind UDP server on port %u\n", g_gcs_config.gcs_port);
+	if (!server.create(g_shared_config.gcs_port, false)) {
+		std::fprintf(stderr, "GCS: failed to bind UDP server on port %u\n", g_shared_config.gcs_port);
 		g_running = false;
 		return;
 	}
 
-	std::printf("GCS: listening on %s:%u\n", g_shared_config.host.c_str(), g_gcs_config.gcs_port);
+	std::printf("GCS: listening on %s:%u\n", g_shared_config.host.c_str(), g_shared_config.gcs_port);
 
 	uint8_t rx_buf[2048];
 	mavlink_status_t parse_status{};
@@ -482,8 +482,8 @@ DashboardState make_dashboard_state()
 {
 	DashboardState state;
 	state.host = g_shared_config.host.c_str();
-	state.gcs_port = g_gcs_config.gcs_port;
-	state.drone_port = g_gcs_config.drone_port;
+	state.gcs_port = g_shared_config.gcs_port;
+	state.drone_port = g_shared_config.drone_port;
 	state.arm_target_altitude_m = g_drone_config.arm_target_altitude_m;
 	state.manual_horizontal_velocity_mps = g_drone_config.manual_horizontal_velocity_mps;
 	state.manual_vertical_velocity_mps = g_drone_config.manual_vertical_velocity_mps;
@@ -537,7 +537,7 @@ int main()
 	}
 
 
-	g_drone_addr = IpAddress{g_shared_config.host.c_str(), g_gcs_config.drone_port};
+	g_drone_addr = IpAddress{g_shared_config.host.c_str(), g_shared_config.drone_port};
 
 	GuiHost gui;
 	if (!gui.initialize()) {
