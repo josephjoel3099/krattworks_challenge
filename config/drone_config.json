@@ -10,7 +10,7 @@
 	"arm_target_altitude_m": 20.0,
 	"horizontal_arrival_tolerance_m": 0.75,
 	"manual_control_timeout_ms": 250,
-	"rx_poll_timeout_ms": 5,
+	"poll_timeout_ms": 5,
 	"drone_system_id": 1,
 	"drone_component_id": 1,
 	"gcs_system_id": 255,

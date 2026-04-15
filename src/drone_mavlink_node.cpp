@@ -50,7 +50,7 @@ void DroneMavlinkNode::run()
 	while (running_) {
 		const auto now = clock::now();
 
-		if (client.poll_read(std::max(1, drone_config_.rx_poll_timeout_ms))) {
+		if (client.poll_read(std::max(1, drone_config_.poll_timeout_ms))) {
 			while (client.available() > 0) {
 				char buffer[1024];
 				IpAddress from;

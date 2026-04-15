@@ -68,7 +68,7 @@ struct DroneConfig {
 	float arm_target_altitude_m = 0.0f;
 	float horizontal_arrival_tolerance_m = 0.75f;
 	int manual_control_timeout_ms = 250;
-	int rx_poll_timeout_ms = 0;
+	int poll_timeout_ms = 0;
 	uint16_t drone_system_id = 1;
 	uint16_t drone_component_id = 1;
 	uint16_t gcs_system_id = 255;
@@ -342,7 +342,7 @@ inline DroneConfig load_drone_config()
 	set_if_present_from_json_number(*json, "arm_target_altitude_m", cfg.arm_target_altitude_m);
 	set_if_present_from_json_number(*json, "horizontal_arrival_tolerance_m", cfg.horizontal_arrival_tolerance_m);
 	set_if_present_from_json_number(*json, "manual_control_timeout_ms", cfg.manual_control_timeout_ms);
-	set_if_present_from_json_number(*json, "rx_poll_timeout_ms", cfg.rx_poll_timeout_ms);
+	set_if_present_from_json_number(*json, "poll_timeout_ms", cfg.poll_timeout_ms);
 	set_if_present_from_json_number(*json, "drone_system_id", cfg.drone_system_id);
 	set_if_present_from_json_number(*json, "drone_component_id", cfg.drone_component_id);
 	set_if_present_from_json_number(*json, "gcs_system_id", cfg.gcs_system_id);
@@ -394,7 +394,7 @@ inline bool is_valid(const DroneConfig& cfg)
 		&& cfg.arm_target_altitude_m > 0.0f
 		&& cfg.horizontal_arrival_tolerance_m > 0.0f
 		&& cfg.manual_control_timeout_ms > 0
-		&& cfg.rx_poll_timeout_ms > 0
+		&& cfg.poll_timeout_ms > 0
 		&& cfg.drone_system_id > 0
 		&& cfg.drone_component_id > 0
 		&& cfg.gcs_system_id > 0
