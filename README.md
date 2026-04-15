@@ -40,11 +40,11 @@ ctest
 ### Initial planning
 
 <p align="center">
-<img src="docs/basic_system.png" width="500"/>
+<img src="docs/basic_system.png" width="900"/>
 </p>
 
 <p align="center">
-<img src="docs/gui_planning.png" width="500"/>
+<img src="docs/gui_planning.png" width="900"/>
 </p>
 
 ### Architecture
@@ -54,7 +54,7 @@ ctest
 - Disarm is the default fallback for SET_MODE. If an unknown command is sent the drone safely disarms. The other alternative would be to ignore unknown command. Both design choices were considered but the former was implemented.
 
 <p align="center">
-<img src="docs/set_mode_feature.png" width="500"/>
+<img src="docs/set_mode_feature.png" width="900"/>
 </p>
 
 - An altitude fence was not set for this simulated drone. This means the drone can climb unlimited using manual control. This could be a specification or limitation in a real drone.
