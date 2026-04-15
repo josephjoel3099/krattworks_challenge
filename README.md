@@ -30,6 +30,18 @@ cmake .. -DCMAKE_CXX_COMPILER=g++
 cmake --build .
 ```
 
+## Run
+In a new terminal
+```
+cd krattworks_challenge/build
+./Drone
+```
+in another teminal
+```
+cd krattworks_challenge/build
+./GCS
+```
+
 ## Run unit test
 ```
 cd build
